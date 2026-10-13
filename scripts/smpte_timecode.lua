@@ -186,7 +186,6 @@ local function probe_with_ffprobe(path)
         },
         capture_stdout = true,
         capture_stderr = true,
-        playback_only = false,
     }, function(success, result)
         if gen ~= state.gen or state.detected then
             return
