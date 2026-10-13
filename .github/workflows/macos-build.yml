@@ -1,0 +1,108 @@
+name: macOS build
+
+on:
+  push:
+    paths:
+      - 'mpv-patches/**'
+      - '.github/workflows/macos-build.yml'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing release to attach the build to (empty: only build)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  MPV_REF: v0.41.0
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mpv-player/mpv
+          ref: ${{ env.MPV_REF }}
+          path: mpv
+
+      - name: Install dependencies
+        run: |
+          find /usr/local/bin -lname '*/Library/Frameworks/Python.framework/*' -delete -print || true
+          brew update
+          brew install -q pkgconf meson ninja freetype fribidi little-cms2 jpeg-turbo \
+            luajit libass ffmpeg uchardet libplacebo molten-vk vulkan-loader vulkan-headers
+
+      - name: Apply patches
+        run: |
+          cd mpv
+          for p in ../mpv-patches/*.patch; do
+            echo "Applying $p"
+            git apply --whitespace=nowarn "$p"
+          done
+
+      - name: Build
+        run: |
+          cd mpv
+          meson setup build --buildtype=release -Dlua=luajit \
+            -Dobjc_args="-Wno-error=deprecated -Wno-error=deprecated-declarations" \
+            -D{gl,iconv,lcms2,jpeg,plain-gl,zlib,uchardet}=enabled \
+            -D{cocoa,coreaudio,gl-cocoa,videotoolbox-gl,videotoolbox-pl}=enabled \
+            -D{swift-build,macos-cocoa-cb,macos-media-player,vulkan}=enabled \
+            -Ddecklink=enabled
+          meson compile -C build
+          meson compile -C build macos-bundle
+
+      - name: Print meson log
+        if: failure()
+        run: cat mpv/build/meson-logs/meson-log.txt
+
+      - name: Test
+        run: |
+          MPV=mpv/build/mpv.app/Contents/MacOS/mpv
+          $MPV --no-config --version
+          grep -q "HAVE_DECKLINK_MAC 1" mpv/build/config.h
+          ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv
+          $MPV --no-config --vo=null --ao=null -v \
+            --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+          grep "decklink" dummy.log | grep -v "slot " || true
+          grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
+          [ "$(grep -c 'slot .* pts [0-9]' dummy.log)" -gt 30 ]
+          # No card on the runner: must fail gracefully, not crash.
+          $MPV --no-config --vo=null --ao=null \
+            --decklink-mirror=auto --length=1 test.mkv 2>&1 | grep decklink
+          # The bundle must not depend on Homebrew.
+          if otool -L $MPV | grep -E '/(opt/homebrew|usr/local)/'; then exit 1; fi
+
+      - name: Package
+        run: |
+          mkdir -p dist/mpv_tc
+          ditto mpv/build/mpv.app dist/mpv.app
+          cp -r scripts script-opts osc README.md LICENSE dist/mpv_tc/
+          ditto -c -k dist mpv-tc-macos-${{ matrix.arch }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpv-tc-macos-${{ matrix.arch }}
+          path: mpv-tc-macos-${{ matrix.arch }}.zip
+
+      - name: Attach to release
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" \
+            mpv-tc-macos-${{ matrix.arch }}.zip --clobber
