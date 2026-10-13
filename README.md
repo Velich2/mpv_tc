@@ -94,7 +94,7 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 окно mpv на мониторе работает как обычно (OSC, таймкод), а на карту параллельно идёт чистая
 картинка без OSD и субтитров. Только Windows, нужен установленный Blackmagic Desktop Video.
 
-Сборка: GitHub Actions → **Windows build** → артефакт `mpv-decklink-win64`; ручной запуск с `release_tag` публикует сборку и `RELEASE_NOTES.md` в релиз
+Сборка: GitHub Actions → **Windows build** → артефакт `mpv-decklink-win64`; ручной запуск с `release_tag` публикует сборку и `RELEASE_NOTES.md` в релиз и ставит его тег на собранный коммит
 (`mpv.exe` с DLL; скрипты этого репозитория — в папке `mpv_tc`).
 
 Включение: меню mpv (кнопка ☰ в OSC, `g m` или `Ctrl+P`) → **DeckLink output** → карта.

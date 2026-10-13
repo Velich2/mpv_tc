@@ -115,6 +115,9 @@ jobs:
           TAG: ${{ inputs.release_tag }}
         run: |
           (cd dist && 7z a -tzip ../mpv-tc-win64.zip . > /dev/null)
+          # The release tag points at the commit the build was made from.
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$TAG"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file RELEASE_NOTES.md
           else
