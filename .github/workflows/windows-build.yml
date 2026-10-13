@@ -100,7 +100,7 @@ jobs:
           mkdir -p dist/mpv_tc
           cp mpv/build/mpv.exe mpv/build/mpv.com dist/
           ldd mpv/build/mpv.exe | awk '{print $3}' | grep -i '^/ucrt64/' | xargs -r -I{} cp {} dist/
-          cp -r scripts script-opts osc README.md dist/mpv_tc/
+          cp -r scripts script-opts osc README.md LICENSE dist/mpv_tc/
 
       - uses: actions/upload-artifact@v4
         with:

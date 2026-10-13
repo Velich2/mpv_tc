@@ -16,6 +16,7 @@
 | `mpv_tc/osc/osc.lua` | панель управления с таймкодом вместо времени |
 | `mpv_tc/script-opts/smpte_timecode.conf` | пример настроек таймкода |
 | `mpv_tc/README.md` | полное описание |
+| `mpv_tc/LICENSE` | лицензия (GPL-2.0-or-later) |
 
 ## Установка
 
