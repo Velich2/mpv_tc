@@ -1,7 +1,7 @@
 # Патчи к mpv
 
 Применяются к mpv `v0.41.0` (`git apply mpv-patches/*.patch`), собираются
-workflow `.github/workflows/windows-build.yml`.
+workflow `.github/workflows/windows-build.yml` и `.github/workflows/macos-build.yml`.
 
 - `0001-vo-add-DeckLink-mirror-output.patch` — вывод на карты Blackmagic
   DeckLink/UltraStudio (`--decklink-mirror`).
@@ -11,3 +11,5 @@ workflow `.github/workflows/windows-build.yml`.
   `decklink-latency`: звук задерживается на задержку карты; переключатель в меню.
 - `0004-decklink-respect-explicit-options.patch` — выбор из меню не перебивает опции,
   явно заданные в командной строке или `mpv.conf`.
+- `0005-decklink-macos-backend.patch` — вывод на DeckLink в macOS (C++ API Desktop Video,
+  заголовки SDK 12.0 для macOS).

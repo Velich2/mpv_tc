@@ -1,24 +1,32 @@
 # mpv_tc — mpv с SMPTE-таймкодом и выводом на Blackmagic DeckLink
 
-Сборка mpv 0.41.0 для Windows (64 бит) с доработками:
+Сборка mpv 0.41.0 для Windows (64 бит) и macOS (Apple Silicon и Intel) с доработками:
 
 - **SMPTE-таймкод** `HH:MM:SS:FF` (drop-frame `HH:MM:SS;FF` для 29.97/59.94) поверх видео
   и вместо текущего времени в панели управления (OSC).
 - **Вывод на карты Blackmagic DeckLink / UltraStudio**: окно mpv работает как обычно,
   а на карту параллельно идёт чистая картинка без OSD и субтитров. Включается из меню mpv.
 
-## Что в архиве `mpv-tc-win64.zip`
+## Файлы
+
+| Архив | Система |
+|---|---|
+| `mpv-tc-win64.zip` | Windows 10/11, 64 бит |
+| `mpv-tc-macos-arm64.zip` | macOS 14+ на Apple Silicon (M1 и новее) |
+| `mpv-tc-macos-x86_64.zip` | macOS 15+ на Intel |
+
+## Что в архиве
 
 | Файл / папка | Что это |
 |---|---|
-| `mpv.exe`, `mpv.com`, `*.dll` | mpv 0.41.0 с выводом на DeckLink |
+| `mpv.exe`, `mpv.com`, `*.dll` (Windows) / `mpv.app` (macOS) | mpv 0.41.0 с выводом на DeckLink |
 | `mpv_tc/scripts/smpte_timecode.lua` | скрипт таймкода |
 | `mpv_tc/osc/osc.lua` | панель управления с таймкодом вместо времени |
 | `mpv_tc/script-opts/smpte_timecode.conf` | пример настроек таймкода |
 | `mpv_tc/README.md` | полное описание |
 | `mpv_tc/LICENSE` | лицензия (GPL-2.0-or-later) |
 
-## Установка
+## Установка (Windows)
 
 1. Распакуйте архив в любую папку и запускайте `mpv.exe` оттуда.
    Настройки и скрипты берутся из `%APPDATA%\mpv\`, как у обычного mpv.
@@ -29,6 +37,15 @@
    - в `%APPDATA%\mpv\mpv.conf` добавьте строку `osc=no`;
    - чтобы таймкод не дублировался поверх видео, в
      `%APPDATA%\mpv\script-opts\smpte_timecode.conf` добавьте `enabled=no`.
+
+## Установка (macOS)
+
+1. Распакуйте архив и перенесите `mpv.app` в «Программы». Приложение не нотаризовано Apple,
+   поэтому перед первым запуском выполните в Терминале:
+   `xattr -dr com.apple.quarantine /Applications/mpv.app`
+2. Настройки и скрипты берутся из `~/.config/mpv/` — те же шаги, что для Windows, с этой
+   папкой вместо `%APPDATA%\mpv\`. `ffprobe` для MOV/MP4: `brew install ffmpeg`.
+3. Лог и список режимов карты: `/Applications/mpv.app/Contents/MacOS/mpv -v файл`.
 
 ## Вывод на DeckLink
 
@@ -50,7 +67,7 @@
 | Опция | Описание |
 |---|---|
 | `decklink-mirror=<карта>` | `auto`, номер или имя карты; пусто — выключено. Если задана, выбор из меню не применяется |
-| `decklink-mode=<режим>` | `auto` или конкретный режим: `1080p25`, `1080i50`, `2160p25`, код `Hp25`. Список — `mpv.com -v` |
+| `decklink-mode=<режим>` | `auto` или конкретный режим: `1080p25`, `1080i50`, `2160p25`, код `Hp25`. Список — `mpv.com -v` (macOS: `mpv -v`) |
 | `decklink-delay=<сек>` | дополнительная задержка вывода, если на карте повторяются или пропадают кадры |
 | `decklink-audio-sync=yes` | синхронизировать звук с картой (то же, что пункт меню) |
 
@@ -71,6 +88,6 @@
 
 Стартовый таймкод берётся из файла: метаданные MXF, трек `tmcd` в MOV/MP4 (через ffprobe),
 иначе `00:00:00:00`. Настройки шрифта, размера, положения и цвета —
-в `script-opts\smpte_timecode.conf`.
+в `script-opts/smpte_timecode.conf` в папке настроек mpv.
 
 Исходники и патчи к mpv: <https://github.com/Velich2/mpv_tc>
