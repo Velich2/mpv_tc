@@ -30,9 +30,11 @@ the video to **Blackmagic DeckLink / UltraStudio** cards.
    from `%APPDATA%\mpv\` as usual.
 2. Copy `mpv_tc\scripts\smpte_timecode.lua` to `%APPDATA%\mpv\scripts\`. MOV/MP4 timecode
    needs `ffprobe` in `PATH` (or set `ffprobe_path`).
-3. Optional, timecode in the OSC: copy `mpv_tc\osc\osc.lua` to `%APPDATA%\mpv\scripts\osc.lua`,
-   add `osc=no` to `mpv.conf`, and `enabled=no` to `script-opts\smpte_timecode.conf` to hide
-   the overlay.
+3. Optional, timecode in the OSC:
+   - copy `mpv_tc\osc\osc.lua` to `%APPDATA%\mpv\scripts\osc.lua`;
+   - add `osc=no` to `%APPDATA%\mpv\mpv.conf`;
+   - to hide the overlay, copy `mpv_tc\script-opts\smpte_timecode.conf` to
+     `%APPDATA%\mpv\script-opts\` and set `enabled=no` in that copy.
 
 The script alone works with any mpv on any OS: copy it to `~/.config/mpv/scripts/`.
 
@@ -66,7 +68,8 @@ from the GPU (use `--hwdec=auto-copy` if needed).
 | Use it elsewhere | property `user-data/smpte_timecode`, e.g. `--term-status-msg='TC ${user-data/smpte_timecode}'` |
 
 Font, size, position, colors and the other options are listed with comments in
-`script-opts/smpte_timecode.conf`.
+`script-opts/smpte_timecode.conf`; copy it to `%APPDATA%\mpv\script-opts\`
+(`~/.config/mpv/script-opts/` on Linux/macOS) and edit the copy.
 
 ### Building
 
@@ -137,7 +140,9 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
    ```
    osc=no
    ```
-3. Чтобы таймкод не дублировался поверх видео, в `script-opts/smpte_timecode.conf`:
+3. Чтобы таймкод не дублировался поверх видео, в `script-opts/smpte_timecode.conf` в папке
+   настроек mpv (Windows: `%APPDATA%\mpv\script-opts\smpte_timecode.conf`; можно скопировать
+   пример из этого репозитория):
    ```
    enabled=no
    ```
