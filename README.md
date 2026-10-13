@@ -1,1 +1,67 @@
 # mpv_tc
+
+SMPTE-таймкод для [mpv](https://mpv.io) — Lua-скрипт, без пересборки плеера.
+
+## Что умеет
+
+- Показывает таймкод `HH:MM:SS:FF` поверх видео; drop-frame — `HH:MM:SS;FF` (29.97, 59.94).
+- Стартовый таймкод берёт из файла:
+  1. сообщение `set-start` (задаётся во время просмотра);
+  2. опция `start_tc`;
+  3. метаданные контейнера, которые отдаёт mpv (MXF);
+  4. `ffprobe` — теги потоков/контейнера (трек `tmcd` в MOV/MP4);
+  5. иначе `00:00:00:00`.
+- Публикует текущий таймкод в свойство `user-data/smpte_timecode`.
+
+## Установка
+
+```sh
+cp scripts/smpte_timecode.lua     ~/.config/mpv/scripts/
+cp script-opts/smpte_timecode.conf ~/.config/mpv/script-opts/   # необязательно
+```
+
+Windows: `%APPDATA%\mpv\scripts\` и `%APPDATA%\mpv\script-opts\`.
+
+Для MOV/MP4 нужен `ffprobe` в `PATH` (или путь в `ffprobe_path`).
+
+## Управление
+
+| Действие | Как |
+|---|---|
+| Вкл/выкл | `Ctrl+T` (опция `key_toggle`) или в `input.conf`: `KEY script-binding smpte_timecode/toggle` |
+| Задать старт | `script-message-to smpte_timecode set-start 01:00:00:00` |
+| Сбросить старт из `set-start` | `script-message-to smpte_timecode set-start` |
+
+Таймкод в своих строках OSD/терминала:
+
+```sh
+mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
+```
+
+## Опции
+
+Файл `script-opts/smpte_timecode.conf` или `--script-opts=smpte_timecode-<опция>=<значение>`.
+
+| Опция | По умолчанию | Описание |
+|---|---|---|
+| `enabled` | `yes` | Показывать при запуске |
+| `position` | `top-right` | `top-left`, `top-center`, `top-right`, `bottom-left`, `bottom-center`, `bottom-right` |
+| `font` | `monospace` | Шрифт |
+| `font_size` | `36` | Размер (относительно OSD высотой 720) |
+| `margin` | `20` | Отступ от края |
+| `color` / `border_color` | `FFFFFF` / `000000` | Цвета, `RRGGBB` |
+| `border_size` | `2` | Толщина обводки |
+| `show_info` | `no` | Вторая строка: fps, DF/NDF, источник стартового TC |
+| `start_tc` | пусто | Принудительный стартовый таймкод |
+| `drop_frame` | `auto` | `auto` (по `;` в стартовом TC), `yes`, `no` |
+| `fps` | `0` | Принудительная частота кадров, `0` — авто |
+| `use_ffprobe` | `yes` | Искать таймкод через ffprobe |
+| `ffprobe_path` | `ffprobe` | Путь к ffprobe |
+| `ffprobe_network` | `no` | Запускать ffprobe и для сетевых URL |
+| `key_toggle` | `ctrl+t` | Клавиша вкл/выкл |
+
+## Ограничения
+
+- Таймкод считается как `старт + round(time-pos × fps)`. Для VFR и файлов с разрывами таймкода
+  (несколько сегментов, SEI-таймкод в H.264/HEVC) он будет приблизительным.
+- Отрицательный `time-pos` или `--rebase-start-time=no` дадут смещённый результат.
