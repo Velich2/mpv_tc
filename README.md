@@ -4,11 +4,14 @@
 
 ## English
 
-SMPTE timecode for [mpv](https://mpv.io) and an mpv 0.41.0 build for Windows that mirrors
-the video to **Blackmagic DeckLink / UltraStudio** cards.
+SMPTE timecode for [mpv](https://mpv.io) and an mpv 0.41.0 build for Windows and macOS that
+mirrors the video to **Blackmagic DeckLink / UltraStudio** cards.
 
-**Download:** [mpv-tc-win64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip)
-([release notes](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC))
+**Download** ([release notes](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC)):
+
+- Windows: [mpv-tc-win64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip)
+- macOS, Apple Silicon: [mpv-tc-macos-arm64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-arm64.zip)
+- macOS, Intel: [mpv-tc-macos-x86_64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-x86_64.zip)
 
 ### Features
 
@@ -17,7 +20,7 @@ the video to **Blackmagic DeckLink / UltraStudio** cards.
   (MXF metadata, the `tmcd` track of MOV/MP4 via ffprobe) or set manually.
 - **Timecode in the on-screen controller** (`osc/osc.lua`, mpv 0.40–0.41): replaces the
   current time next to the seek bar; click it to cycle timecode → time → time with ms.
-- **DeckLink output** (patched mpv, Windows): the mpv window works as usual (OSC, timecode),
+- **DeckLink output** (patched mpv, Windows and macOS): the mpv window works as usual (OSC, timecode),
   while the card gets a clean picture without OSD and subtitles. Enabled from the mpv menu,
   remembered across restarts. The output mode follows the video's frame rate and size
   (e.g. 25p → 1080p25); other sizes are letterboxed.
@@ -35,6 +38,17 @@ the video to **Blackmagic DeckLink / UltraStudio** cards.
    - add `osc=no` to `%APPDATA%\mpv\mpv.conf`;
    - to hide the overlay, copy `mpv_tc\script-opts\smpte_timecode.conf` to
      `%APPDATA%\mpv\script-opts\` and set `enabled=no` in that copy.
+
+### Install (macOS build)
+
+1. Unzip the archive and move `mpv.app` to `Applications`. The app is not notarized, so
+   before the first start run in Terminal:
+   `xattr -dr com.apple.quarantine /Applications/mpv.app`
+2. Settings and scripts are read from `~/.config/mpv/`. Copy
+   `mpv_tc/scripts/smpte_timecode.lua` to `~/.config/mpv/scripts/`; for MOV/MP4 timecode
+   install `ffprobe` (`brew install ffmpeg`) or set `ffprobe_path`.
+3. Optional, timecode in the OSC: copy `mpv_tc/osc/osc.lua` to `~/.config/mpv/scripts/osc.lua`
+   and add `osc=no` to `~/.config/mpv/mpv.conf` (the overlay is hidden as on Windows).
 
 The script alone works with any mpv on any OS: copy it to `~/.config/mpv/scripts/`.
 
@@ -57,7 +71,8 @@ Requires **Blackmagic Desktop Video 12.0 or newer**.
 
 Notes: the card shows each frame about 3 card frames after the window; only video goes to
 the card (8-bit 4:2:2), audio stays on the computer; with `--hwdec`, frames are copied back
-from the GPU (use `--hwdec=auto-copy` if needed).
+from the GPU (use `--hwdec=auto-copy` if needed). On macOS, run
+`/Applications/mpv.app/Contents/MacOS/mpv -v` from Terminal to see the modes and log.
 
 ### Timecode controls
 
@@ -75,23 +90,27 @@ Font, size, position, colors and the other options are listed with comments in
 
 `mpv-patches/` holds the patches against mpv `v0.41.0`. The **Windows build** GitHub Actions
 workflow applies them, builds with MSYS2 and uploads `mpv.exe` with its DLLs; a manual run
-with `release_tag` publishes the build and `RELEASE_NOTES.md` to that release.
+with `release_tag` publishes the build and `RELEASE_NOTES.md` to that release. The
+**macOS build** workflow builds `mpv.app` with Homebrew libraries (arm64 and x86_64); a manual
+run with `release_tag` attaches the zips to that release.
 
 ### License
 
 GPL-2.0-or-later, see [LICENSE](LICENSE). `osc/osc.lua` and the patches are derived from
 mpv (LGPL-2.1-or-later / GPL-2.0-or-later). The DeckLink SDK interface files included in
-`mpv-patches/0001-*.patch` are © Blackmagic Design under the license in their headers. The
-Windows build bundles mpv, FFmpeg and other libraries under their own licenses; their
-sources are available from the respective projects and MSYS2.
+`mpv-patches/0001-*.patch` and `0005-*.patch` are © Blackmagic Design under the license in
+their headers. The builds bundle mpv, FFmpeg and other libraries under their own licenses; their
+sources are available from the respective projects, MSYS2 and Homebrew.
 
 ## Русский
 
 SMPTE-таймкод для [mpv](https://mpv.io) — Lua-скрипт и панель управления, а также сборка
-mpv 0.41.0 для Windows с выводом на карты Blackmagic DeckLink / UltraStudio.
+mpv 0.41.0 для Windows и macOS с выводом на карты Blackmagic DeckLink / UltraStudio.
 
-Скачать: [mpv-tc-win64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip)
-([описание релиза](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC)).
+Скачать ([описание релиза](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC)):
+[Windows](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip) ·
+[macOS Apple Silicon](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-arm64.zip) ·
+[macOS Intel](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-x86_64.zip).
 
 ### Что умеет
 
@@ -185,13 +204,18 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 
 Патч `mpv-patches/0001-vo-add-DeckLink-mirror-output.patch` к mpv 0.41.0 добавляет зеркало:
 окно mpv на мониторе работает как обычно (OSC, таймкод), а на карту параллельно идёт чистая
-картинка без OSD и субтитров. Только Windows, нужен установленный Blackmagic Desktop Video.
+картинка без OSD и субтитров. Windows и macOS (патч `0005`), нужен установленный Blackmagic
+Desktop Video.
 
 Сборка: GitHub Actions → **Windows build** → артефакт `mpv-decklink-win64`; ручной запуск с `release_tag` публикует сборку и `RELEASE_NOTES.md` в релиз и ставит его тег на собранный коммит
-(`mpv.exe` с DLL; скрипты этого репозитория — в папке `mpv_tc`).
+(`mpv.exe` с DLL; скрипты этого репозитория — в папке `mpv_tc`). **macOS build** собирает
+`mpv.app` (arm64 и x86_64) и с `release_tag` добавляет архивы в релиз.
+
+macOS: `mpv.app` не нотаризован — перед первым запуском
+`xattr -dr com.apple.quarantine /Applications/mpv.app`. Настройки — в `~/.config/mpv/`.
 
 Включение: меню mpv (кнопка ☰ в OSC, `g m` или `Ctrl+P`) → **DeckLink output** → карта.
-Выбор запоминается в `%APPDATA%\mpv\decklink.state` и применяется при следующем запуске;
+Выбор запоминается в `decklink.state` в папке настроек mpv и применяется при следующем запуске;
 «Off» в том же меню выключает вывод. Там же **Sync audio to DeckLink: on/off** задерживает звук
 на задержку карты, чтобы он совпадал с картинкой на карте, а не в окне (тоже запоминается).
 Из командной строки:
@@ -224,5 +248,5 @@ decklink-mirror=auto
 
 GPL-2.0-or-later, см. [LICENSE](LICENSE). `osc/osc.lua` и патчи основаны на mpv
 (LGPL-2.1-or-later / GPL-2.0-or-later). Файлы интерфейса DeckLink SDK в
-`mpv-patches/0001-*.patch` — © Blackmagic Design, лицензия в заголовках файлов. Сборка для
-Windows содержит mpv, FFmpeg и другие библиотеки под их собственными лицензиями.
+`mpv-patches/0001-*.patch` и `0005-*.patch` — © Blackmagic Design, лицензия в заголовках
+файлов. Сборки содержат mpv, FFmpeg и другие библиотеки под их собственными лицензиями.
