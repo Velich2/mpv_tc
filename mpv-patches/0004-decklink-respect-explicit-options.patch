@@ -1,0 +1,76 @@
+From 09de60654f4c25a0f4b7b1714284fc714851eb4d Mon Sep 17 00:00:00 2001
+From: mpv_tc <noreply@anthropic.com>
+Date: Tue, 13 Oct 2026 07:48:49 +0000
+Subject: [PATCH] select.lua: don't override explicit DeckLink options with the
+ saved state
+
+Restore the device and audio sync chosen in the menu only if the options
+were not given on the command line or in a config file, so that e.g. an
+explicit empty --decklink-mirror keeps the output disabled. Adds the
+option-info/<name>/set-from-config property for this.
+---
+ DOCS/man/input.rst    |  3 +++
+ player/command.c      |  1 +
+ player/lua/select.lua | 12 +++++++++---
+ 3 files changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
+index 36022d5..fdb4b65 100644
+--- a/DOCS/man/input.rst
++++ b/DOCS/man/input.rst
+@@ -4014,6 +4014,9 @@ Property list
+         to if the option is e.g. changed at runtime is left undefined (meaning
+         it could change in the future).
+ 
++    ``option-info/<name>/set-from-config``
++        Whether the option was set from a config file.
++
+     ``option-info/<name>/set-locally``
+         Whether the option was set per-file. This is the case with
+         automatically loaded profiles, file-dir configs, and other cases. It
+diff --git a/player/command.c b/player/command.c
+index 6c2c3fc..1944bd0 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -3945,6 +3945,7 @@ static int mp_property_option_info(void *ctx, struct m_property *prop,
+             {"name",                    SUB_PROP_STR(co->name)},
+             {"type",                    SUB_PROP_STR(opt->type->name)},
+             {"set-from-commandline",    SUB_PROP_BOOL(co->is_set_from_cmdline)},
++            {"set-from-config",         SUB_PROP_BOOL(co->is_set_from_config)},
+             {"set-locally",             SUB_PROP_BOOL(co->is_set_locally)},
+             {"expects-file",            SUB_PROP_BOOL(opt->flags & M_OPT_FILE)},
+             {"default-value",           *opt, def, .unavailable = !has_default},
+diff --git a/player/lua/select.lua b/player/lua/select.lua
+index 80b49fd..074f6f4 100644
+--- a/player/lua/select.lua
++++ b/player/lua/select.lua
+@@ -419,17 +419,23 @@ local function decklink_supported()
+     return mp.get_property("option-info/decklink-mirror") ~= nil
+ end
+ 
+--- Restore the DeckLink settings chosen in the menu, unless set otherwise.
++local function set_explicitly(option)
++    return mp.get_property_bool("option-info/" .. option .. "/set-from-commandline") or
++           mp.get_property_bool("option-info/" .. option .. "/set-from-config")
++end
++
++-- Restore the DeckLink settings chosen in the menu, unless the options were
++-- given on the command line or in a config file.
+ if decklink_supported() and mp.get_property_bool("config") then
+     local file = io.open(mp.command_native({"expand-path", decklink_state}))
+     if file then
+         local device = file:read("*l")
+         local audio_sync = file:read("*l")
+         file:close()
+-        if device and device ~= "" and mp.get_property("decklink-mirror") == "" then
++        if device and device ~= "" and not set_explicitly("decklink-mirror") then
+             mp.set_property("decklink-mirror", device)
+         end
+-        if audio_sync == "audio-sync" then
++        if audio_sync == "audio-sync" and not set_explicitly("decklink-audio-sync") then
+             mp.set_property_bool("decklink-audio-sync", true)
+         end
+     end
+-- 
+2.43.0
+
