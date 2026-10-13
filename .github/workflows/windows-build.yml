@@ -1,0 +1,100 @@
+name: Windows build
+
+on:
+  push:
+    paths:
+      - 'mpv-patches/**'
+      - '.github/workflows/windows-build.yml'
+  workflow_dispatch:
+
+env:
+  MPV_REF: v0.41.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Disable autocrlf
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mpv-player/mpv
+          ref: ${{ env.MPV_REF }}
+          path: mpv
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: git
+          pacboy: >-
+            cc:p
+            ffmpeg:p
+            lcms2:p
+            libass:p
+            libjpeg-turbo:p
+            libplacebo:p
+            luajit:p
+            meson:p
+            ninja:p
+            pkgconf:p
+            python:p
+            shaderc:p
+            spirv-cross:p
+            tools-git:p
+            uchardet:p
+            vulkan-devel:p
+
+      - name: Apply patches
+        run: |
+          cd mpv
+          for p in ../mpv-patches/*.patch; do
+            echo "Applying $p"
+            git apply --whitespace=nowarn "$p"
+          done
+
+      - name: Build
+        run: |
+          cd mpv
+          meson setup build --buildtype=release -Dlibmpv=false -Dlua=luajit \
+            -Dd3d11=enabled -Dshaderc=enabled -Dspirv-cross=enabled \
+            -Djpeg=enabled -Dlcms2=enabled -Duchardet=enabled -Ddecklink=enabled
+          meson compile -C build
+
+      - name: Print meson log
+        if: failure()
+        run: cat mpv/build/meson-logs/meson-log.txt
+
+      - name: Test
+        run: |
+          ./mpv/build/mpv.com --no-config --version
+          ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv
+          ./mpv/build/mpv.com --no-config --vo=null --ao=null -v \
+            --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+          grep "decklink" dummy.log | grep -v "slot " || true
+          grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
+          [ "$(grep -c 'slot .* pts [0-9]' dummy.log)" -gt 30 ]
+          # No card on the runner: must fail gracefully, not crash.
+          ./mpv/build/mpv.com --no-config --vo=null --ao=null \
+            --decklink-mirror=auto --length=1 test.mkv 2>&1 | grep decklink
+
+      - name: Package
+        run: |
+          mkdir -p dist/mpv_tc
+          cp mpv/build/mpv.exe mpv/build/mpv.com dist/
+          ldd mpv/build/mpv.exe | awk '{print $3}' | grep -i '^/ucrt64/' | xargs -r -I{} cp {} dist/
+          cp -r scripts script-opts osc README.md dist/mpv_tc/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpv-decklink-win64
+          path: dist
