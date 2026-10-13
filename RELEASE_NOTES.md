@@ -12,7 +12,7 @@
 | Архив | Система |
 |---|---|
 | `mpv-tc-win64.zip` | Windows 10/11, 64 бит |
-| `mpv-tc-macos-arm64.zip` | macOS 14+ на Apple Silicon (M1 и новее) |
+| `mpv-tc-macos-arm64.zip` | macOS 15+ на Apple Silicon (M1 и новее) |
 | `mpv-tc-macos-x86_64.zip` | macOS 15+ на Intel |
 
 ## Что в архиве

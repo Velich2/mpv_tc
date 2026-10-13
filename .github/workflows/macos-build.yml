@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             arch: arm64
           - os: macos-15-intel
             arch: x86_64
@@ -63,6 +63,13 @@ jobs:
             -D{swift-build,macos-cocoa-cb,macos-media-player,vulkan}=enabled \
             -Ddecklink=enabled
           meson compile -C build
+          # Without Swift there is no Xcode rpath to remove, and the grep fails.
+          python3 - <<'PY'
+          f = 'TOOLS/dylib_unhell.py'
+          s = open(f).read()
+          s = s.replace('CommandLineTools"\'', 'CommandLineTools" || true\'')
+          open(f, 'w').write(s)
+          PY
           meson compile -C build macos-bundle
 
       - name: Print meson log
