@@ -38,6 +38,28 @@ Windows: `%APPDATA%\mpv\scripts\` и `%APPDATA%\mpv\script-opts\`.
 mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 ```
 
+## Таймкод в панели управления (OSC)
+
+`osc/osc.lua` — стандартный OSC из mpv 0.41.0, у которого вместо текущего времени слева от
+полосы перемотки показывается SMPTE-таймкод. Рассчитан на mpv 0.40–0.41 (`mpv --version`).
+
+1. Скопировать `osc/osc.lua` в папку `scripts` рядом с `smpte_timecode.lua`
+   (Windows: `%APPDATA%\mpv\scripts\osc.lua`). Имя файла должно остаться `osc.lua`.
+2. В `mpv.conf` (Windows: `%APPDATA%\mpv\mpv.conf`) отключить встроенный OSC:
+   ```
+   osc=no
+   ```
+3. Чтобы таймкод не дублировался поверх видео, в `script-opts/smpte_timecode.conf`:
+   ```
+   enabled=no
+   ```
+   `Ctrl+T` по-прежнему включает и выключает таймкод поверх видео.
+
+Клик по таймкоду в OSC переключает: таймкод → время → время с миллисекундами → таймкод.
+Показ по умолчанию отключается в `script-opts/osc.conf`: `smpte_timecode=no`.
+
+Для другой версии mpv: взять `player/lua/osc.lua` этой версии и наложить `osc/osc-smpte.patch`.
+
 ## Опции
 
 Файл `script-opts/smpte_timecode.conf` или `--script-opts=smpte_timecode-<опция>=<значение>`.
