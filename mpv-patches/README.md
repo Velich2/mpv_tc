@@ -7,3 +7,5 @@ workflow `.github/workflows/windows-build.yml`.
   DeckLink/UltraStudio (`--decklink-mirror`).
 - `0002-decklink-runtime-and-menu.patch` — включение на лету, свойство
   `decklink-devices`, пункт «DeckLink output» в меню и запоминание выбора.
+- `0003-decklink-audio-sync.patch` — `--decklink-audio-sync` и свойство
+  `decklink-latency`: звук задерживается на задержку карты; переключатель в меню.

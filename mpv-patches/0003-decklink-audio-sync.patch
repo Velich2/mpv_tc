@@ -1,0 +1,435 @@
+From 1ab525591fe86fe53675dcc8a28acb55e6323a44 Mon Sep 17 00:00:00 2001
+From: mpv_tc <noreply@anthropic.com>
+Date: Tue, 13 Oct 2026 07:47:29 +0000
+Subject: [PATCH] decklink: optionally delay audio by the output latency
+
+--decklink-audio-sync adds the mirror's latency (new decklink-latency
+property) to the effective audio delay, so that the computer's audio
+matches the DeckLink output instead of the window. --audio-delay stays
+the user's own correction on top. The latency is picked up in the
+playloop once the output runs. The DeckLink menu gets a 'Sync audio to
+DeckLink' toggle, saved with the device in ~~/decklink.state.
+---
+ DOCS/man/input.rst          |  4 ++++
+ DOCS/man/options.rst        |  7 +++++++
+ options/options.c           |  1 +
+ options/options.h           |  1 +
+ player/audio.c              | 26 ++++++++++++++++++++++++--
+ player/command.c            | 20 +++++++++++++++-----
+ player/core.h               |  2 ++
+ player/lua/select.lua       | 35 ++++++++++++++++++++++++++---------
+ player/misc.c               |  2 +-
+ player/playloop.c           |  2 ++
+ player/video.c              |  6 ++----
+ video/out/decklink/mirror.c | 18 ++++++++++++++++++
+ video/out/decklink/mirror.h |  4 ++++
+ video/out/vo.c              | 14 ++++++++++++++
+ video/out/vo.h              |  1 +
+ 15 files changed, 122 insertions(+), 21 deletions(-)
+
+diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
+index 2d2ff6d..36022d5 100644
+--- a/DOCS/man/input.rst
++++ b/DOCS/man/input.rst
+@@ -3750,6 +3750,10 @@ Property list
+     builds with DeckLink support only). Each entry has a ``name``. The devices
+     are enumerated on every read.
+ 
++``decklink-latency``
++    How much later than the window the ``--decklink-mirror`` output shows a
++    frame, in seconds. Unavailable while the output is not running.
++
+ ``audio-device-list``
+     The list of discovered audio devices. This is mostly for use with the
+     client API, and reflects what ``--audio-device=help`` with the command line
+diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
+index 96adba9..b44626a 100644
+--- a/DOCS/man/options.rst
++++ b/DOCS/man/options.rst
+@@ -1206,6 +1206,13 @@ Video
+     it if frames are repeated or skipped on the output while they play
+     smoothly in the window.
+ 
++``--decklink-audio-sync=<yes|no>``
++    Delay the audio by the latency of the ``--decklink-mirror`` output (see the
++    ``decklink-latency`` property), so that it matches the DeckLink output
++    rather than the window (default: no). This adds to ``--audio-delay``, which
++    can be used for additional correction, e.g. for the monitor's own latency.
++    Also available in the ``DeckLink output`` menu entry.
++
+ ``--vd=<...>``
+     Specify a priority list of video decoders to be used, according to their
+     family and name. See ``--ad`` for further details. Both of these options
+diff --git a/options/options.c b/options/options.c
+index 2368ad9..5ebf308 100644
+--- a/options/options.c
++++ b/options/options.c
+@@ -254,6 +254,7 @@ static const m_option_t mp_vo_opt_list[] = {
+     {"decklink-mirror", OPT_STRING(decklink_mirror)},
+     {"decklink-mode", OPT_STRING(decklink_mode)},
+     {"decklink-delay", OPT_DOUBLE(decklink_delay), M_RANGE(0, 2)},
++    {"decklink-audio-sync", OPT_BOOL(decklink_audio_sync)},
+ #endif
+     {0}
+ };
+diff --git a/options/options.h b/options/options.h
+index ffd7ed1..6db1225 100644
+--- a/options/options.h
++++ b/options/options.h
+@@ -95,6 +95,7 @@ typedef struct mp_vo_opts {
+     char *decklink_mirror;
+     char *decklink_mode;
+     double decklink_delay;
++    bool decklink_audio_sync;
+ } mp_vo_opts;
+ 
+ // Subtitle options needed by the subtitle decoders/renderers.
+diff --git a/player/audio.c b/player/audio.c
+index b3e975d..c8f53b7 100644
+--- a/player/audio.c
++++ b/player/audio.c
+@@ -227,6 +227,28 @@ static void ao_chain_reset_state(struct ao_chain *ao_c)
+     ao_c->delaying_audio_start = false;
+ }
+ 
++// --audio-delay, plus the DeckLink output latency with --decklink-audio-sync.
++double get_audio_delay(struct MPContext *mpctx)
++{
++    double delay = mpctx->opts->audio_delay;
++    if (mpctx->opts->vo->decklink_audio_sync && mpctx->video_out)
++        delay += vo_get_decklink_latency(mpctx->video_out);
++    return delay;
++}
++
++// Applies a change of get_audio_delay() to the running audio.
++void update_audio_delay(struct MPContext *mpctx)
++{
++    if (!mpctx->ao_chain)
++        return;
++    double delay = get_audio_delay(mpctx);
++    if (delay != mpctx->ao_chain->delay) {
++        mpctx->delay += delay - mpctx->ao_chain->delay;
++        mpctx->ao_chain->delay = delay;
++        mp_wakeup_core(mpctx);
++    }
++}
++
+ void reset_audio_state(struct MPContext *mpctx)
+ {
+     if (mpctx->ao_chain) {
+@@ -576,7 +598,7 @@ void reinit_audio_chain_src(struct MPContext *mpctx, struct track *track)
+         mp_output_chain_create(mpctx->filter_root, MP_OUTPUT_CHAIN_AUDIO);
+     ao_c->spdif_passthrough = true;
+     ao_c->last_out_pts = MP_NOPTS_VALUE;
+-    ao_c->delay = mpctx->opts->audio_delay;
++    ao_c->delay = get_audio_delay(mpctx);
+ 
+     ao_c->ao_filter = mp_filter_create(mpctx->filter_root, &ao_filter);
+     if (!ao_c->filter || !ao_c->ao_filter)
+@@ -815,7 +837,7 @@ static bool get_sync_pts(struct MPContext *mpctx, double *pts)
+         if (mpctx->video_status < STATUS_READY)
+             return false; // wait until we know a video PTS
+         if (mpctx->video_pts != MP_NOPTS_VALUE)
+-            *pts = mpctx->video_pts - opts->audio_delay;
++            *pts = mpctx->video_pts - get_audio_delay(mpctx);
+     } else if (mpctx->hrseek_active) {
+         *pts = mpctx->hrseek_pts;
+     } else {
+diff --git a/player/command.c b/player/command.c
+index 9c1c0c0..6c2c3fc 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -1886,6 +1886,18 @@ static int mp_property_decklink_devices(void *ctx, struct m_property *prop,
+ }
+ #endif
+ 
++#if HAVE_DECKLINK
++static int mp_property_decklink_latency(void *ctx, struct m_property *prop,
++                                        int action, void *arg)
++{
++    MPContext *mpctx = ctx;
++    double latency = mpctx->video_out ? vo_get_decklink_latency(mpctx->video_out) : 0;
++    if (latency <= 0)
++        return M_PROPERTY_UNAVAILABLE;
++    return m_property_double_ro(action, arg, latency);
++}
++#endif
++
+ static int mp_property_ao(void *ctx, struct m_property *p, int action, void *arg)
+ {
+     MPContext *mpctx = ctx;
+@@ -4472,6 +4484,7 @@ static const struct m_property mp_properties_base[] = {
+     {"audio-device-list", mp_property_audio_devices},
+ #if HAVE_DECKLINK
+     {"decklink-devices", mp_property_decklink_devices},
++    {"decklink-latency", mp_property_decklink_latency},
+ #endif
+     {"current-ao", mp_property_ao},
+ 
+@@ -8103,11 +8116,8 @@ void mp_option_run_callback(struct MPContext *mpctx, struct mp_option_callback *
+     if (opt_ptr == &opts->pause)
+         set_pause_state(mpctx, opts->pause);
+ 
+-    if (opt_ptr == &opts->audio_delay) {
+-        if (mpctx->ao_chain) {
+-            mpctx->delay += mpctx->opts->audio_delay - mpctx->ao_chain->delay;
+-            mpctx->ao_chain->delay = mpctx->opts->audio_delay;
+-        }
++    if (opt_ptr == &opts->audio_delay || opt_ptr == &opts->vo->decklink_audio_sync) {
++        update_audio_delay(mpctx);
+         mp_wakeup_core(mpctx);
+     }
+ 
+diff --git a/player/core.h b/player/core.h
+index eb7f508..5796fe2 100644
+--- a/player/core.h
++++ b/player/core.h
+@@ -496,6 +496,8 @@ struct mp_abort_entry {
+ 
+ // audio.c
+ void reset_audio_state(struct MPContext *mpctx);
++double get_audio_delay(struct MPContext *mpctx);
++void update_audio_delay(struct MPContext *mpctx);
+ void reinit_audio_chain(struct MPContext *mpctx);
+ int init_audio_decoder(struct MPContext *mpctx, struct track *track);
+ int reinit_audio_filters(struct MPContext *mpctx);
+diff --git a/player/lua/select.lua b/player/lua/select.lua
+index 2029bfd..80b49fd 100644
+--- a/player/lua/select.lua
++++ b/player/lua/select.lua
+@@ -419,20 +419,23 @@ local function decklink_supported()
+     return mp.get_property("option-info/decklink-mirror") ~= nil
+ end
+ 
+--- Restore the DeckLink output chosen in the menu, unless it was set otherwise.
+-if decklink_supported() and mp.get_property_bool("config") and
+-   mp.get_property("decklink-mirror") == "" then
++-- Restore the DeckLink settings chosen in the menu, unless set otherwise.
++if decklink_supported() and mp.get_property_bool("config") then
+     local file = io.open(mp.command_native({"expand-path", decklink_state}))
+     if file then
+         local device = file:read("*l")
++        local audio_sync = file:read("*l")
+         file:close()
+-        if device and device ~= "" then
++        if device and device ~= "" and mp.get_property("decklink-mirror") == "" then
+             mp.set_property("decklink-mirror", device)
+         end
++        if audio_sync == "audio-sync" then
++            mp.set_property_bool("decklink-audio-sync", true)
++        end
+     end
+ end
+ 
+-local function save_decklink(device)
++local function save_decklink()
+     if not mp.get_property_bool("config") then
+         return
+     end
+@@ -442,12 +445,16 @@ local function save_decklink(device)
+         show_error(error_message)
+         return
+     end
+-    file:write(device, "\n")
++    file:write(mp.get_property("decklink-mirror"), "\n")
++    if mp.get_property_bool("decklink-audio-sync") then
++        file:write("audio-sync\n")
++    end
+     file:close()
+ end
+ 
+ mp.add_key_binding(nil, "select-decklink", function ()
+     local current = mp.get_property("decklink-mirror")
++    local audio_sync = mp.get_property_bool("decklink-audio-sync")
+     local items = {"Off", "Auto (first device)"}
+     local devices = {"", "auto"}
+ 
+@@ -468,14 +475,24 @@ mp.add_key_binding(nil, "select-decklink", function ()
+         end
+     end
+ 
++    -- Delays the audio by the output latency, so that it matches the
++    -- DeckLink output instead of the window.
++    items[#items + 1] = "Sync audio to DeckLink: " .. (audio_sync and "on" or "off")
++
+     input.select({
+         prompt = "DeckLink output:",
+         items = items,
+         default_item = default_item,
+         submit = function (id)
+-            mp.set_property("decklink-mirror", devices[id])
+-            save_decklink(devices[id])
+-            mp.osd_message("DeckLink output: " .. (id == 1 and "off" or items[id]))
++            if id > #devices then
++                mp.set_property_bool("decklink-audio-sync", not audio_sync)
++                mp.osd_message("Sync audio to DeckLink: " ..
++                               (audio_sync and "off" or "on"))
++            else
++                mp.set_property("decklink-mirror", devices[id])
++                mp.osd_message("DeckLink output: " .. (id == 1 and "off" or items[id]))
++            end
++            save_decklink()
+         end,
+     })
+ end)
+diff --git a/player/misc.c b/player/misc.c
+index a600c4f..2dd86a1 100644
+--- a/player/misc.c
++++ b/player/misc.c
+@@ -146,7 +146,7 @@ double get_track_seek_offset(struct MPContext *mpctx, struct track *track)
+     struct MPOpts *opts = mpctx->opts;
+     if (track->selected) {
+         if (track->type == STREAM_AUDIO)
+-            return -opts->audio_delay;
++            return -get_audio_delay(mpctx);
+         if (track->type == STREAM_SUB)
+         {
+             for (int n = 0; n < num_ptracks[STREAM_SUB]; n++) {
+diff --git a/player/playloop.c b/player/playloop.c
+index f111920..7300a36 100644
+--- a/player/playloop.c
++++ b/player/playloop.c
+@@ -1265,6 +1265,8 @@ void run_playloop(struct MPContext *mpctx)
+     handle_cursor_autohide(mpctx);
+     handle_vo_events(mpctx);
+     handle_command_updates(mpctx);
++    // The DeckLink output latency is only known once it runs.
++    update_audio_delay(mpctx);
+ 
+     if (mpctx->lavfi && mp_filter_has_failed(mpctx->lavfi))
+         mpctx->stop_play = AT_END_OF_FILE;
+diff --git a/player/video.c b/player/video.c
+index 0e1ac29..872c490 100644
+--- a/player/video.c
++++ b/player/video.c
+@@ -347,7 +347,7 @@ static void adjust_sync(struct MPContext *mpctx, double v_pts, double frame_time
+     if (mpctx->audio_status != STATUS_PLAYING)
+         return;
+ 
+-    double a_pts = written_audio_pts(mpctx) + opts->audio_delay - mpctx->delay;
++    double a_pts = written_audio_pts(mpctx) + get_audio_delay(mpctx) - mpctx->delay;
+     double av_delay = a_pts - v_pts;
+ 
+     double change = av_delay * 0.1;
+@@ -636,8 +636,6 @@ static void update_avsync_before_frame(struct MPContext *mpctx)
+ // Update the A/V sync difference when a new video frame is being shown.
+ static void update_av_diff(struct MPContext *mpctx, double offset)
+ {
+-    struct MPOpts *opts = mpctx->opts;
+-
+     mpctx->last_av_difference = 0;
+ 
+     if (mpctx->audio_status != STATUS_PLAYING ||
+@@ -650,7 +648,7 @@ static void update_av_diff(struct MPContext *mpctx, double offset)
+     double a_pos = playing_audio_pts(mpctx);
+     if (a_pos != MP_NOPTS_VALUE && mpctx->video_pts != MP_NOPTS_VALUE) {
+         mpctx->last_av_difference = a_pos - mpctx->video_pts
+-                                  + opts->audio_delay + offset;
++                                  + get_audio_delay(mpctx) + offset;
+     }
+ 
+     if (fabs(mpctx->last_av_difference) > 0.5 && !mpctx->drop_message_shown) {
+diff --git a/video/out/decklink/mirror.c b/video/out/decklink/mirror.c
+index 938c306..c50eb46 100644
+--- a/video/out/decklink/mirror.c
++++ b/video/out/decklink/mirror.c
+@@ -74,6 +74,7 @@ struct dl_mirror {
+     mp_mutex lock;
+     mp_cond wakeup;
+     bool terminate;
++    double latency;
+     struct pending pending[MAX_PENDING];
+     int num_pending;
+     struct ring_entry ring[RING_SIZE];
+@@ -232,6 +233,7 @@ static void stop_output(struct dl_mirror *m)
+     m->started = false;
+     mp_mutex_lock(&m->lock);
+     free_ring(m);
++    m->latency = 0;
+     mp_mutex_unlock(&m->lock);
+ }
+ 
+@@ -285,6 +287,14 @@ static bool configure(struct dl_mirror *m, int w, int h, double fps)
+     }
+     m->started = true;
+ 
++    // A frame is shown in the first slot at least this much after its VO
++    // display time, on average half a frame later.
++    int64_t frame_ns = MP_TIME_S_TO_NS(m->mode.duration) / m->mode.timescale;
++    mp_mutex_lock(&m->lock);
++    m->latency = MP_TIME_NS_TO_S(m->out.fill_ahead_ns + MARGIN_NS + m->delay_ns +
++                                 frame_ns / 2);
++    mp_mutex_unlock(&m->lock);
++
+     char name[32];
+     mode_short_name(&m->mode, name, sizeof(name));
+     MP_INFO(m, "Output %s (%dx%d) for %dx%d @ %.3f fps.\n", name,
+@@ -504,6 +514,14 @@ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+     mp_mutex_unlock(&m->lock);
+ }
+ 
++double dl_mirror_get_latency(struct dl_mirror *m)
++{
++    mp_mutex_lock(&m->lock);
++    double r = m->latency;
++    mp_mutex_unlock(&m->lock);
++    return r;
++}
++
+ char **dl_list_devices(void *ta_ctx, int *num)
+ {
+     *num = 0;
+diff --git a/video/out/decklink/mirror.h b/video/out/decklink/mirror.h
+index 16bf4d3..e3249a2 100644
+--- a/video/out/decklink/mirror.h
++++ b/video/out/decklink/mirror.h
+@@ -39,5 +39,9 @@ void dl_mirror_destroy(struct dl_mirror *m);
+ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+                      int64_t target, double duration);
+ 
++// How much later than the VO the output shows a frame, in seconds; 0 while the
++// output is not running.
++double dl_mirror_get_latency(struct dl_mirror *m);
++
+ // Names of the available output devices (empty if not supported).
+ char **dl_list_devices(void *ta_ctx, int *num);
+diff --git a/video/out/vo.c b/video/out/vo.c
+index e94317d..79ef769 100644
+--- a/video/out/vo.c
++++ b/video/out/vo.c
+@@ -952,6 +952,20 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
+     mp_mutex_unlock(&in->lock);
+ }
+ 
++// Latency of the DeckLink mirror output in seconds (0 if inactive).
++double vo_get_decklink_latency(struct vo *vo)
++{
++    double r = 0;
++#if HAVE_DECKLINK
++    struct vo_internal *in = vo->in;
++    mp_mutex_lock(&in->lock);
++    if (in->dl_mirror)
++        r = dl_mirror_get_latency(in->dl_mirror);
++    mp_mutex_unlock(&in->lock);
++#endif
++    return r;
++}
++
+ // If a frame is currently being rendered (or queued), wait until it's done.
+ // Otherwise, return immediately.
+ void vo_wait_frame(struct vo *vo)
+diff --git a/video/out/vo.h b/video/out/vo.h
+index 160d860..62d658a 100644
+--- a/video/out/vo.h
++++ b/video/out/vo.h
+@@ -532,6 +532,7 @@ void vo_control_async(struct vo *vo, int request, void *data);
+ bool vo_is_ready_for_frame(struct vo *vo, int64_t next_pts);
+ bool vo_is_visible(struct vo *vo);
+ void vo_queue_frame(struct vo *vo, struct vo_frame *frame);
++double vo_get_decklink_latency(struct vo *vo);
+ void vo_wait_frame(struct vo *vo);
+ bool vo_still_displaying(struct vo *vo);
+ void vo_request_wakeup_on_done(struct vo *vo);
+-- 
+2.43.0
+
