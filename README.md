@@ -1,8 +1,96 @@
 # mpv_tc
 
-SMPTE-таймкод для [mpv](https://mpv.io) — Lua-скрипт, без пересборки плеера.
+[English](#english) · [Русский](#русский)
 
-## Что умеет
+## English
+
+SMPTE timecode for [mpv](https://mpv.io) and an mpv 0.41.0 build for Windows that mirrors
+the video to **Blackmagic DeckLink / UltraStudio** cards.
+
+**Download:** [mpv-tc-win64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip)
+([release notes](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC))
+
+### Features
+
+- **Timecode overlay** (`scripts/smpte_timecode.lua`, works with any mpv): `HH:MM:SS:FF`,
+  drop-frame `HH:MM:SS;FF` for 29.97/59.94. The start timecode is read from the file
+  (MXF metadata, the `tmcd` track of MOV/MP4 via ffprobe) or set manually.
+- **Timecode in the on-screen controller** (`osc/osc.lua`, mpv 0.40–0.41): replaces the
+  current time next to the seek bar; click it to cycle timecode → time → time with ms.
+- **DeckLink output** (patched mpv, Windows): the mpv window works as usual (OSC, timecode),
+  while the card gets a clean picture without OSD and subtitles. Enabled from the mpv menu,
+  remembered across restarts. The output mode follows the video's frame rate and size
+  (e.g. 25p → 1080p25); other sizes are letterboxed.
+- **Audio sync**: optionally delays the computer's audio by the card latency, so that it
+  matches the picture on the DeckLink output.
+
+### Install (Windows build)
+
+1. Unzip the archive anywhere and run `mpv.exe` from there. Settings and scripts are read
+   from `%APPDATA%\mpv\` as usual.
+2. Copy `mpv_tc\scripts\smpte_timecode.lua` to `%APPDATA%\mpv\scripts\`. MOV/MP4 timecode
+   needs `ffprobe` in `PATH` (or set `ffprobe_path`).
+3. Optional, timecode in the OSC: copy `mpv_tc\osc\osc.lua` to `%APPDATA%\mpv\scripts\osc.lua`,
+   add `osc=no` to `mpv.conf`, and `enabled=no` to `script-opts\smpte_timecode.conf` to hide
+   the overlay.
+
+The script alone works with any mpv on any OS: copy it to `~/.config/mpv/scripts/`.
+
+### DeckLink output
+
+Requires **Blackmagic Desktop Video 12.0 or newer**.
+
+1. Open the menu: ☰ button in the OSC, `Ctrl+P`, or `g` then `m`.
+2. **DeckLink output** → pick a card (or **Auto** for the first card with an output).
+   **Off** disables it.
+3. **Sync audio to DeckLink: on** delays the audio to match the card; fine-tune the rest
+   (e.g. the monitor's own latency) with `audio-delay`.
+
+| Option | Description |
+|---|---|
+| `--decklink-mirror=<device>` | `auto`, an index, or (part of) the card name; empty disables. Overrides the menu choice |
+| `--decklink-mode=<mode>` | `auto`, or e.g. `1080p25`, `1080i50`, `2160p25`, or a DeckLink code like `Hp25` (list with `mpv.com -v`) |
+| `--decklink-delay=<s>` | Extra output delay if frames repeat or skip on the card |
+| `--decklink-audio-sync=yes` | Delay the audio by the output latency (`decklink-latency` property) |
+
+Notes: the card shows each frame about 3 card frames after the window; only video goes to
+the card (8-bit 4:2:2), audio stays on the computer; with `--hwdec`, frames are copied back
+from the GPU (use `--hwdec=auto-copy` if needed).
+
+### Timecode controls
+
+| Action | How |
+|---|---|
+| Toggle the overlay | `Ctrl+T` (`script-binding smpte_timecode/toggle`) |
+| Set the start timecode | `script-message-to smpte_timecode set-start 01:00:00:00` |
+| Use it elsewhere | property `user-data/smpte_timecode`, e.g. `--term-status-msg='TC ${user-data/smpte_timecode}'` |
+
+Font, size, position, colors and the other options are listed with comments in
+`script-opts/smpte_timecode.conf`.
+
+### Building
+
+`mpv-patches/` holds the patches against mpv `v0.41.0`. The **Windows build** GitHub Actions
+workflow applies them, builds with MSYS2 and uploads `mpv.exe` with its DLLs; a manual run
+with `release_tag` publishes the build and `RELEASE_NOTES.md` to that release.
+
+### License
+
+GPL-2.0-or-later, see [LICENSE](LICENSE). `osc/osc.lua` and the patches are derived from
+mpv (LGPL-2.1-or-later / GPL-2.0-or-later). The DeckLink SDK interface files included in
+`mpv-patches/0001-*.patch` are © Blackmagic Design under the license in their headers. The
+Windows build bundles mpv, FFmpeg and other libraries under their own licenses; their
+sources are available from the respective projects and MSYS2.
+
+## Русский
+
+SMPTE-таймкод для [mpv](https://mpv.io) — Lua-скрипт и панель управления, а также сборка
+mpv 0.41.0 для Windows с выводом на карты Blackmagic DeckLink / UltraStudio.
+
+Скачать: [mpv-tc-win64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip)
+([описание релиза](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC)).
+
+### Что умеет
 
 - Показывает таймкод `HH:MM:SS:FF` поверх видео; drop-frame — `HH:MM:SS;FF` (29.97, 59.94).
 - Стартовый таймкод берёт из файла:
@@ -13,7 +101,7 @@ SMPTE-таймкод для [mpv](https://mpv.io) — Lua-скрипт, без �
   5. иначе `00:00:00:00`.
 - Публикует текущий таймкод в свойство `user-data/smpte_timecode`.
 
-## Установка
+### Установка
 
 ```sh
 cp scripts/smpte_timecode.lua     ~/.config/mpv/scripts/
@@ -24,7 +112,7 @@ Windows: `%APPDATA%\mpv\scripts\` и `%APPDATA%\mpv\script-opts\`.
 
 Для MOV/MP4 нужен `ffprobe` в `PATH` (или путь в `ffprobe_path`).
 
-## Управление
+### Управление
 
 | Действие | Как |
 |---|---|
@@ -38,7 +126,7 @@ Windows: `%APPDATA%\mpv\scripts\` и `%APPDATA%\mpv\script-opts\`.
 mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 ```
 
-## Таймкод в панели управления (OSC)
+### Таймкод в панели управления (OSC)
 
 `osc/osc.lua` — стандартный OSC из mpv 0.41.0, у которого вместо текущего времени слева от
 полосы перемотки показывается SMPTE-таймкод. Рассчитан на mpv 0.40–0.41 (`mpv --version`).
@@ -60,7 +148,7 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 
 Для другой версии mpv: взять `player/lua/osc.lua` этой версии и наложить `osc/osc-smpte.patch`.
 
-## Опции
+### Опции
 
 Файл `script-opts/smpte_timecode.conf` или `--script-opts=smpte_timecode-<опция>=<значение>`.
 
@@ -82,13 +170,13 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 | `ffprobe_network` | `no` | Запускать ffprobe и для сетевых URL |
 | `key_toggle` | `ctrl+t` | Клавиша вкл/выкл |
 
-## Ограничения
+### Ограничения
 
 - Таймкод считается как `старт + round(time-pos × fps)`. Для VFR и файлов с разрывами таймкода
   (несколько сегментов, SEI-таймкод в H.264/HEVC) он будет приблизительным.
 - Отрицательный `time-pos` или `--rebase-start-time=no` дадут смещённый результат.
 
-## Вывод на Blackmagic DeckLink / UltraStudio (форк mpv)
+### Вывод на Blackmagic DeckLink / UltraStudio (форк mpv)
 
 Патч `mpv-patches/0001-vo-add-DeckLink-mirror-output.patch` к mpv 0.41.0 добавляет зеркало:
 окно mpv на мониторе работает как обычно (OSC, таймкод), а на карту параллельно идёт чистая
@@ -126,3 +214,10 @@ decklink-mirror=auto
 - Звук идёт через звуковую карту ПК, на DeckLink выводится только видео (8 бит 4:2:2).
   С синхронизацией звука он совпадает с картинкой на карте, окно при этом чуть опережает звук.
 - При `--hwdec` кадры копируются из видеопамяти; при проблемах — `--hwdec=auto-copy`.
+
+### Лицензия
+
+GPL-2.0-or-later, см. [LICENSE](LICENSE). `osc/osc.lua` и патчи основаны на mpv
+(LGPL-2.1-or-later / GPL-2.0-or-later). Файлы интерфейса DeckLink SDK в
+`mpv-patches/0001-*.patch` — © Blackmagic Design, лицензия в заголовках файлов. Сборка для
+Windows содержит mpv, FFmpeg и другие библиотеки под их собственными лицензиями.
