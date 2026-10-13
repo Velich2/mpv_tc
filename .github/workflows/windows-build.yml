@@ -6,6 +6,14 @@ on:
       - 'mpv-patches/**'
       - '.github/workflows/windows-build.yml'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release to publish the build and RELEASE_NOTES.md to (empty: only build)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
 
 env:
   MPV_REF: v0.41.0
@@ -98,3 +106,19 @@ jobs:
         with:
           name: mpv-decklink-win64
           path: dist
+
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          (cd dist && 7z a -tzip ../mpv-tc-win64.zip . > /dev/null)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "mpv_tc" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" mpv-tc-win64.zip --clobber
