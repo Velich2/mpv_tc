@@ -9,3 +9,5 @@ workflow `.github/workflows/windows-build.yml`.
   `decklink-devices`, пункт «DeckLink output» в меню и запоминание выбора.
 - `0003-decklink-audio-sync.patch` — `--decklink-audio-sync` и свойство
   `decklink-latency`: звук задерживается на задержку карты; переключатель в меню.
+- `0004-decklink-respect-explicit-options.patch` — выбор из меню не перебивает опции,
+  явно заданные в командной строке или `mpv.conf`.
