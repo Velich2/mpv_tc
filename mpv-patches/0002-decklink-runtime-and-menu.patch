@@ -1,0 +1,553 @@
+From 5aa5ce738f95bd39cacbe96c792b5ecf1805a042 Mon Sep 17 00:00:00 2001
+From: mpv_tc <noreply@anthropic.com>
+Date: Tue, 13 Oct 2026 07:20:19 +0000
+Subject: [PATCH] decklink: allow changing the mirror at runtime, add menu
+ entry
+
+--decklink-* options now take effect at runtime: the mirror is recreated
+on the VO thread and immediately shows the current frame. The new
+decklink-devices property lists the output devices; select.lua gets a
+'DeckLink output' menu entry that sets --decklink-mirror and remembers the
+choice in ~~/decklink.state for the next start.
+---
+ DOCS/man/input.rst               |   5 +
+ DOCS/man/options.rst             |   4 +-
+ player/command.c                 |  34 +++++++
+ player/lua/select.lua            |  69 ++++++++++++++
+ video/out/decklink/backend.h     |   2 +
+ video/out/decklink/backend_win.c | 155 ++++++++++++++++++++++---------
+ video/out/decklink/mirror.c      |  16 +++-
+ video/out/decklink/mirror.h      |   7 +-
+ video/out/vo.c                   |  52 ++++++++++-
+ 9 files changed, 293 insertions(+), 51 deletions(-)
+
+diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
+index 24f9d7a..2d2ff6d 100644
+--- a/DOCS/man/input.rst
++++ b/DOCS/man/input.rst
+@@ -3745,6 +3745,11 @@ Property list
+     In earlier versions of mpv, these properties returned a static (but bad)
+     guess using a completely different method.
+ 
++``decklink-devices``
++    The DeckLink devices with an output, for ``--decklink-mirror`` (Windows
++    builds with DeckLink support only). Each entry has a ``name``. The devices
++    are enumerated on every read.
++
+ ``audio-device-list``
+     The list of discovered audio devices. This is mostly for use with the
+     client API, and reflects what ``--audio-device=help`` with the command line
+diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
+index d1b78cc..96adba9 100644
+--- a/DOCS/man/options.rst
++++ b/DOCS/man/options.rst
+@@ -1191,7 +1191,9 @@ Video
+ 
+     The card runs on its own clock and shows each frame about 3 card frames
+     after the window does. Hardware decoded frames are copied back to system
+-    memory. Cannot be changed at runtime.
++    memory. Can be changed at runtime; the ``DeckLink output`` entry of the
++    menu (``script-binding select/menu``) sets it and remembers the choice
++    for the next start in ``~~/decklink.state``.
+ 
+ ``--decklink-mode=<auto|mode>``
+     Output mode for ``--decklink-mirror``. ``auto`` (default) picks the mode
+diff --git a/player/command.c b/player/command.c
+index 96bc06a..9c1c0c0 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -60,6 +60,9 @@
+ #include "options/m_config_frontend.h"
+ #include "options/parse_configfile.h"
+ #include "osdep/getpid.h"
++#if HAVE_DECKLINK
++#include "video/out/decklink/mirror.h"
++#endif
+ #include "video/out/vo.h"
+ #include "video/csputils.h"
+ #include "video/hwdec.h"
+@@ -1855,6 +1858,34 @@ static int mp_property_audio_devices(void *ctx, struct m_property *prop,
+                                 get_device_entry, list);
+ }
+ 
++#if HAVE_DECKLINK
++static int get_decklink_device_entry(int item, int action, void *arg, void *ctx)
++{
++    char **names = ctx;
++    struct m_sub_property props[] = {
++        {"name", SUB_PROP_STR(names[item])},
++        {0}
++    };
++    return m_property_read_sub(props, action, arg);
++}
++
++static int mp_property_decklink_devices(void *ctx, struct m_property *prop,
++                                        int action, void *arg)
++{
++    if (action == M_PROPERTY_GET_TYPE) {
++        *(struct m_option *)arg = (struct m_option){.type = CONF_TYPE_NODE};
++        return M_PROPERTY_OK;
++    }
++    void *tmp = talloc_new(NULL);
++    int num = 0;
++    char **names = dl_list_devices(tmp, &num);
++    int r = m_property_read_list(action, arg, num, get_decklink_device_entry,
++                                 names);
++    talloc_free(tmp);
++    return r;
++}
++#endif
++
+ static int mp_property_ao(void *ctx, struct m_property *p, int action, void *arg)
+ {
+     MPContext *mpctx = ctx;
+@@ -4439,6 +4470,9 @@ static const struct m_property mp_properties_base[] = {
+     {"aid", mp_property_switch_track, .priv = (void *)(const int[]){0, STREAM_AUDIO}},
+     {"audio-device", mp_property_audio_device},
+     {"audio-device-list", mp_property_audio_devices},
++#if HAVE_DECKLINK
++    {"decklink-devices", mp_property_decklink_devices},
++#endif
+     {"current-ao", mp_property_ao},
+ 
+     // Video
+diff --git a/player/lua/select.lua b/player/lua/select.lua
+index 38f29cd..2029bfd 100644
+--- a/player/lua/select.lua
++++ b/player/lua/select.lua
+@@ -413,6 +413,73 @@ mp.add_key_binding(nil, "select-audio-device", function ()
+     })
+ end)
+ 
++local decklink_state = "~~/decklink.state"
++
++local function decklink_supported()
++    return mp.get_property("option-info/decklink-mirror") ~= nil
++end
++
++-- Restore the DeckLink output chosen in the menu, unless it was set otherwise.
++if decklink_supported() and mp.get_property_bool("config") and
++   mp.get_property("decklink-mirror") == "" then
++    local file = io.open(mp.command_native({"expand-path", decklink_state}))
++    if file then
++        local device = file:read("*l")
++        file:close()
++        if device and device ~= "" then
++            mp.set_property("decklink-mirror", device)
++        end
++    end
++end
++
++local function save_decklink(device)
++    if not mp.get_property_bool("config") then
++        return
++    end
++    local path = mp.command_native({"expand-path", decklink_state})
++    local file, error_message = io.open(path, "w")
++    if not file then
++        show_error(error_message)
++        return
++    end
++    file:write(device, "\n")
++    file:close()
++end
++
++mp.add_key_binding(nil, "select-decklink", function ()
++    local current = mp.get_property("decklink-mirror")
++    local items = {"Off", "Auto (first device)"}
++    local devices = {"", "auto"}
++
++    for _, device in ipairs(mp.get_property_native("decklink-devices", {})) do
++        items[#items + 1] = device.name
++        devices[#devices + 1] = device.name
++    end
++
++    if #devices == 2 and current == "" then
++        show_warning("No DeckLink devices found.")
++        return
++    end
++
++    local default_item = 1
++    for i, device in ipairs(devices) do
++        if device == current then
++            default_item = i
++        end
++    end
++
++    input.select({
++        prompt = "DeckLink output:",
++        items = items,
++        default_item = default_item,
++        submit = function (id)
++            mp.set_property("decklink-mirror", devices[id])
++            save_decklink(devices[id])
++            mp.osd_message("DeckLink output: " .. (id == 1 and "off" or items[id]))
++        end,
++    })
++end)
++
+ local function format_history_entry(entry)
+     local status
+     status, entry.time = pcall(os.date, options.history_date_format, entry.time)
+@@ -717,6 +784,8 @@ mp.add_key_binding(nil, "menu", function ()
+         {is_disc and "Titles" or "Editions", "script-binding select/select-edition",
+          mp.get_property_native("edition-list/count", 0) > 1},
+         {"Audio devices", "script-binding select/select-audio-device", audio_track_count > 0},
++        {"DeckLink output" .. (mp.get_property("decklink-mirror", "") ~= "" and " (on)" or ""),
++         "script-binding select/select-decklink", decklink_supported()},
+         {"Key bindings", "script-binding select/select-binding", true},
+         {"History", "script-binding select/select-watch-history", true},
+         {"Watch later", "script-binding select/select-watch-later", true},
+diff --git a/video/out/decklink/backend.h b/video/out/decklink/backend.h
+index bbb3756..c9a43ef 100644
+--- a/video/out/decklink/backend.h
++++ b/video/out/decklink/backend.h
+@@ -62,3 +62,5 @@ struct dl_backend {
+ 
+ extern const struct dl_backend dl_backend_dummy;
+ extern const struct dl_backend dl_backend_win;
++
++char **dl_win_list_devices(void *ta_ctx, int *num);
+diff --git a/video/out/decklink/backend_win.c b/video/out/decklink/backend_win.c
+index 09a9b5d..1a1dab6 100644
+--- a/video/out/decklink/backend_win.c
++++ b/video/out/decklink/backend_win.c
+@@ -29,6 +29,7 @@
+ #include <math.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <strings.h>
+ 
+ #include "common/common.h"
+ #include "common/msg.h"
+@@ -347,36 +348,28 @@ static void add_modes(struct dl_output *o)
+     IDeckLinkDisplayModeIterator_Release(it);
+ }
+ 
+-// device: "auto" (first device with output), an index, or part of the name.
+-static bool win_open(struct dl_output *o, const char *device)
+-{
+-    struct priv *p = o->priv = talloc_zero(NULL, struct priv);
+-    p->o = o;
+-    p->callback.lpVtbl = &callback_vtbl;
+-    mp_mutex_init(&p->lock);
+-    p->com_init = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
++struct device_entry {
++    IDeckLink *device;
++    IDeckLinkOutput *output;
++    char *name;
++};
+ 
++// Lists the devices that have an output. Call with COM initialized.
++static int enum_devices(void *ta_ctx, struct mp_log *log,
++                        struct device_entry **list)
++{
++    *list = NULL;
+     IDeckLinkIterator *it = NULL;
+     HRESULT hr = CoCreateInstance(&CLSID_CDeckLinkIterator, NULL, CLSCTX_ALL,
+                                   &IID_IDeckLinkIterator, (void **)&it);
+     if (FAILED(hr)) {
+-        MP_ERR(o, "Could not access DeckLink devices; is Blackmagic Desktop "
+-               "Video installed? (0x%lx)\n", (unsigned long)hr);
+-        goto error;
+-    }
+-
+-    int index = -1;
+-    if (strcmp(device, "auto") == 0) {
+-        index = 0;
+-    } else {
+-        char *end;
+-        long n = strtol(device, &end, 10);
+-        if (end != device && !*end && n >= 0)
+-            index = n;
++        mp_msg(log, MSGL_ERR, "Could not access DeckLink devices; is Blackmagic "
++               "Desktop Video installed? (0x%lx)\n", (unsigned long)hr);
++        return 0;
+     }
+ 
++    int num = 0;
+     IDeckLink *dev = NULL;
+-    int count = 0;
+     while (IDeckLinkIterator_Next(it, &dev) == S_OK) {
+         IDeckLinkOutput *output = NULL;
+         if (FAILED(IDeckLink_QueryInterface(dev, &IID_IDeckLinkOutput,
+@@ -388,36 +381,114 @@ static bool win_open(struct dl_output *o, const char *device)
+         BSTR bname = NULL;
+         char *name = NULL;
+         if (SUCCEEDED(IDeckLink_GetDisplayName(dev, &bname)))
+-            name = bstr_to_utf8(NULL, bname);
+-        MP_VERBOSE(o, "Device %d: %s\n", count, name ? name : "?");
+-
+-        bool match = index >= 0 ? count == index
+-                                : name && contains_nocase(name, device);
+-        if (match && !p->output) {
+-            MP_INFO(o, "Using %s.\n", name ? name : "DeckLink device");
+-            p->device = dev;
+-            p->output = output;
+-        } else {
+-            IDeckLinkOutput_Release(output);
+-            IDeckLink_Release(dev);
+-        }
+-        talloc_free(name);
+-        count++;
++            name = bstr_to_utf8(ta_ctx, bname);
++        struct device_entry entry = {
++            .device = dev,
++            .output = output,
++            .name = name ? name : talloc_asprintf(ta_ctx, "DeckLink %d", num + 1),
++        };
++        MP_TARRAY_APPEND(ta_ctx, *list, num, entry);
+     }
+     IDeckLinkIterator_Release(it);
++    return num;
++}
++
++static void release_devices(struct device_entry *list, int num)
++{
++    for (int n = 0; n < num; n++) {
++        if (list[n].output)
++            IDeckLinkOutput_Release(list[n].output);
++        if (list[n].device)
++            IDeckLink_Release(list[n].device);
++    }
++}
++
++// device: "auto" (first device with output), an index, the name, or part of it.
++static bool win_open(struct dl_output *o, const char *device)
++{
++    struct priv *p = o->priv = talloc_zero(NULL, struct priv);
++    p->o = o;
++    p->callback.lpVtbl = &callback_vtbl;
++    mp_mutex_init(&p->lock);
++    p->com_init = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
++
++    void *tmp = talloc_new(NULL);
++    struct device_entry *list;
++    int num = enum_devices(tmp, o->log, &list);
++
++    int idx = -1;
++    char *end;
++    long n = strtol(device, &end, 10);
++    if (strcmp(device, "auto") == 0) {
++        idx = num > 0 ? 0 : -1;
++    } else if (end != device && !*end) {
++        idx = n >= 0 && n < num ? n : -1;
++    } else {
++        for (int i = 0; i < num && idx < 0; i++) {
++            if (strcasecmp(list[i].name, device) == 0)
++                idx = i;
++        }
++        for (int i = 0; i < num && idx < 0; i++) {
++            if (contains_nocase(list[i].name, device))
++                idx = i;
++        }
++    }
++    for (int i = 0; i < num; i++)
++        MP_VERBOSE(o, "Device %d: %s\n", i, list[i].name);
++
++    if (idx >= 0) {
++        MP_INFO(o, "Using %s.\n", list[idx].name);
++        p->device = list[idx].device;
++        p->output = list[idx].output;
++        list[idx] = (struct device_entry){0};
++    }
++    release_devices(list, num);
++    talloc_free(tmp);
+ 
+     if (!p->output) {
+         MP_ERR(o, "No DeckLink output device matching '%s' (%d found).\n",
+-               device, count);
+-        goto error;
++               device, num);
++        win_close(o);
++        return false;
+     }
+ 
+     add_modes(o);
+     return true;
++}
+ 
+-error:
+-    win_close(o);
+-    return false;
++struct list_ctx {
++    void *ta_ctx;
++    char **names;
++    int num;
++};
++
++static MP_THREAD_VOID list_thread(void *ptr)
++{
++    struct list_ctx *ctx = ptr;
++    bool com_init = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
++    void *tmp = talloc_new(NULL);
++    struct device_entry *list;
++    int num = enum_devices(tmp, mp_null_log, &list);
++    for (int n = 0; n < num; n++) {
++        MP_TARRAY_APPEND(ctx->ta_ctx, ctx->names, ctx->num,
++                         talloc_strdup(ctx->ta_ctx, list[n].name));
++    }
++    release_devices(list, num);
++    talloc_free(tmp);
++    if (com_init)
++        CoUninitialize();
++    MP_THREAD_RETURN();
++}
++
++// Runs on a separate thread to keep COM off the caller's thread.
++char **dl_win_list_devices(void *ta_ctx, int *num)
++{
++    struct list_ctx ctx = { .ta_ctx = ta_ctx };
++    mp_thread thread;
++    if (!mp_thread_create(&thread, list_thread, &ctx))
++        mp_thread_join(thread);
++    *num = ctx.num;
++    return ctx.names;
+ }
+ 
+ const struct dl_backend dl_backend_win = {
+diff --git a/video/out/decklink/mirror.c b/video/out/decklink/mirror.c
+index 9cde04b..938c306 100644
+--- a/video/out/decklink/mirror.c
++++ b/video/out/decklink/mirror.c
+@@ -20,6 +20,7 @@
+ #include <strings.h>
+ 
+ #include "common/common.h"
++#include "common/global.h"
+ #include "common/msg.h"
+ #include "mpv_talloc.h"
+ #include "options/m_config.h"
+@@ -503,12 +504,21 @@ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+     mp_mutex_unlock(&m->lock);
+ }
+ 
+-struct dl_mirror *dl_mirror_create(struct mpv_global *global,
+-                                   struct mp_log *log)
++char **dl_list_devices(void *ta_ctx, int *num)
++{
++    *num = 0;
++#if HAVE_WIN32_DESKTOP
++    return dl_win_list_devices(ta_ctx, num);
++#else
++    return NULL;
++#endif
++}
++
++struct dl_mirror *dl_mirror_create(struct mpv_global *global)
+ {
+     struct dl_mirror *m = talloc_zero(NULL, struct dl_mirror);
+     m->global = global;
+-    m->log = mp_log_new(m, log, "decklink");
++    m->log = mp_log_new(m, global->log, "decklink");
+     m->opts = mp_get_config_group(m, global, &vo_sub_opts);
+     m->delay_ns = MP_TIME_S_TO_NS(m->opts->decklink_delay);
+ 
+diff --git a/video/out/decklink/mirror.h b/video/out/decklink/mirror.h
+index a63341b..16bf4d3 100644
+--- a/video/out/decklink/mirror.h
++++ b/video/out/decklink/mirror.h
+@@ -29,8 +29,8 @@ struct mp_image;
+ struct mpv_global;
+ struct mp_log;
+ 
+-struct dl_mirror *dl_mirror_create(struct mpv_global *global,
+-                                   struct mp_log *log);
++// Options are read from --decklink-*; recreate the mirror when they change.
++struct dl_mirror *dl_mirror_create(struct mpv_global *global);
+ void dl_mirror_destroy(struct dl_mirror *m);
+ 
+ // Called for every new frame queued to the VO. target is the realtime (in
+@@ -38,3 +38,6 @@ void dl_mirror_destroy(struct dl_mirror *m);
+ // is the approximate frame duration in ns (<= 0 if unknown).
+ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+                      int64_t target, double duration);
++
++// Names of the available output devices (empty if not supported).
++char **dl_list_devices(void *ta_ctx, int *num);
+diff --git a/video/out/vo.c b/video/out/vo.c
+index 854bb22..e94317d 100644
+--- a/video/out/vo.c
++++ b/video/out/vo.c
+@@ -124,7 +124,10 @@ static const struct vo_driver *const video_out_drivers[] =
+ 
+ struct vo_internal {
+ #if HAVE_DECKLINK
+-    struct dl_mirror *dl_mirror;
++    struct dl_mirror *dl_mirror; // protected by lock
++    // Option values dl_mirror was created with (VO thread only).
++    char *dl_device, *dl_mode;
++    double dl_delay;
+ #endif
+     mp_thread thread;
+     struct mp_dispatch_queue *dispatch;
+@@ -240,12 +243,56 @@ static void read_opts(struct vo *vo)
+     mp_mutex_unlock(&in->lock);
+ }
+ 
++#if HAVE_DECKLINK
++// (Re)creates the DeckLink mirror if its options changed.
++static void update_decklink(struct vo *vo)
++{
++    struct vo_internal *in = vo->in;
++    struct mp_vo_opts *opts = vo->opts;
++    const char *device = opts->decklink_mirror ? opts->decklink_mirror : "";
++    const char *mode = opts->decklink_mode ? opts->decklink_mode : "";
++
++    if (in->dl_device && strcmp(device, in->dl_device) == 0 &&
++        strcmp(mode, in->dl_mode) == 0 && opts->decklink_delay == in->dl_delay)
++        return;
++    talloc_replace(vo, in->dl_device, device);
++    talloc_replace(vo, in->dl_mode, mode);
++    in->dl_delay = opts->decklink_delay;
++
++    mp_mutex_lock(&in->lock);
++    struct dl_mirror *old = in->dl_mirror;
++    in->dl_mirror = NULL;
++    mp_mutex_unlock(&in->lock);
++    dl_mirror_destroy(old);
++
++    if (!device[0])
++        return;
++    struct dl_mirror *m = dl_mirror_create(vo->global);
++    mp_mutex_lock(&in->lock);
++    in->dl_mirror = m;
++    // Show the current frame right away, e.g. when enabled while paused.
++    if (m && in->current_frame && in->current_frame->current) {
++        dl_mirror_queue(m, in->current_frame->current, 0,
++                        in->current_frame->duration);
++    }
++    mp_mutex_unlock(&in->lock);
++}
++
++static void run_update_decklink(void *p)
++{
++    update_decklink(p);
++}
++#endif
++
+ static void update_opts(void *p)
+ {
+     struct vo *vo = p;
+ 
+     if (m_config_cache_update(vo->opts_cache)) {
+         read_opts(vo);
++#if HAVE_DECKLINK
++        update_decklink(vo);
++#endif
+         if (vo->driver->control) {
+             vo->driver->control(vo, VOCTRL_VO_OPTS_CHANGED, NULL);
+             // "Legacy" update of video position related options.
+@@ -326,8 +373,7 @@ static struct vo *vo_create(bool probing, struct mpv_global *global,
+         goto error;
+     }
+ #if HAVE_DECKLINK
+-    if (vo->opts->decklink_mirror && vo->opts->decklink_mirror[0])
+-        vo->in->dl_mirror = dl_mirror_create(global, log);
++    mp_dispatch_run(vo->in->dispatch, run_update_decklink, vo);
+ #endif
+     return vo;
+ 
+-- 
+2.43.0
+

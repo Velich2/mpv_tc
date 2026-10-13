@@ -97,6 +97,10 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 Сборка: GitHub Actions → **Windows build** → артефакт `mpv-decklink-win64`
 (`mpv.exe` с DLL; скрипты этого репозитория — в папке `mpv_tc`).
 
+Включение: меню mpv (кнопка ☰ в OSC, `g m` или `Ctrl+P`) → **DeckLink output** → карта.
+Выбор запоминается в `%APPDATA%\mpv\decklink.state` и применяется при следующем запуске;
+«Off» в том же меню выключает вывод. Из командной строки:
+
 ```
 mpv --decklink-mirror=auto file.mov
 ```
@@ -107,7 +111,7 @@ mpv --decklink-mirror=auto file.mov
 | `--decklink-mode=<режим>` | `auto` (по частоте кадров и размеру видео) или `1080p25`, `1080i50`, `2160p25`, код `Hp25`. Список — `mpv -v` |
 | `--decklink-delay=<сек>` | Дополнительная задержка вывода, если на карте повторяются/пропадают кадры |
 
-Для постоянного использования — в `mpv.conf`:
+Вместо меню можно прописать в `mpv.conf` (тогда сохранённый выбор из меню не применяется):
 
 ```
 decklink-mirror=auto
