@@ -109,13 +109,14 @@ jobs:
           ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=25 -t 3 -c:v mpeg2video -q:v 2 \
             -timecode 10:00:00:00 tc.mov
           ./mpv/build/mpv.com --no-config --vo=null --ao=null -v \
-            --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+            --msg-time --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
           grep "decklink" dummy.log | grep -v "slot " || true
           grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
           # Every slot shows the next frame: no repeats or skips once running.
           grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
             awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
-                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }'
+                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }' ||
+            { grep -E "slot|decklink\]|Dropped|frame" dummy.log | head -80; false; }
           # No card on the runner: must fail gracefully, not crash.
           ./mpv/build/mpv.com --no-config --vo=null --ao=null \
             --decklink-mirror=auto --length=1 test.mkv > nocard.log 2>&1
@@ -150,6 +151,7 @@ jobs:
           if (-not (Select-String -Path pkg.log -Pattern 'PIXFMT=gbrp16')) { throw "LUT filter not active" }
 
       - name: Zip
+        shell: bash
         run: (cd dist && 7z a -tzip ../mpv-tc-win64.zip . > /dev/null)
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -224,13 +226,14 @@ jobs:
           ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=25 -t 3 -c:v mpeg2video -q:v 2 \
             -timecode 10:00:00:00 tc.mov
           $MPV --no-config --vo=null --ao=null -v \
-            --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+            --msg-time --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
           grep "decklink" dummy.log | grep -v "slot " || true
           grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
           # Every slot shows the next frame: no repeats or skips once running.
           grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
             awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
-                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }'
+                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }' ||
+            { grep -E "slot|decklink\]|Dropped|frame" dummy.log | head -80; false; }
           # No card on the runner: must fail gracefully, not crash.
           $MPV --no-config --vo=null --ao=null \
             --decklink-mirror=auto --length=1 test.mkv > nocard.log 2>&1
