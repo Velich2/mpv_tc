@@ -1,0 +1,318 @@
+name: Build
+
+on:
+  push:
+    paths:
+      - 'mpv-patches/**'
+      - 'scripts/**'
+      - 'script-opts/**'
+      - 'luts/**'
+      - 'osc/**'
+      - 'ci/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'mpv-patches/**'
+      - 'scripts/**'
+      - 'script-opts/**'
+      - 'luts/**'
+      - 'osc/**'
+      - 'ci/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release to publish both builds and RELEASE_NOTES.md to (empty: only build); main only'
+        required: false
+        default: ''
+
+# The build jobs run third-party build code and get a read-only token; only the
+# publish job can write.
+permissions:
+  contents: read
+
+env:
+  MPV_REF: v0.41.0
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Disable autocrlf
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mpv-player/mpv
+          ref: ${{ env.MPV_REF }}
+          path: mpv
+          persist-credentials: false
+
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          update: true
+          install: git
+          pacboy: >-
+            cc:p
+            ffmpeg:p
+            lcms2:p
+            libass:p
+            libjpeg-turbo:p
+            libplacebo:p
+            luajit:p
+            meson:p
+            ninja:p
+            pkgconf:p
+            python:p
+            shaderc:p
+            spirv-cross:p
+            tools-git:p
+            uchardet:p
+            vulkan-devel:p
+
+      - name: Apply patches
+        run: |
+          cd mpv
+          for p in ../mpv-patches/*.patch; do
+            echo "Applying $p"
+            git apply --whitespace=nowarn "$p"
+          done
+
+      - name: Build
+        run: |
+          cd mpv
+          meson setup build --buildtype=release -Dlibmpv=false -Dlua=luajit \
+            -Dd3d11=enabled -Dshaderc=enabled -Dspirv-cross=enabled \
+            -Djpeg=enabled -Dlcms2=enabled -Duchardet=enabled -Ddecklink=enabled
+          meson compile -C build
+
+      - name: Print meson log
+        if: failure()
+        run: cat mpv/build/meson-logs/meson-log.txt
+
+      - name: Test
+        run: |
+          set -o pipefail
+          ./mpv/build/mpv.com --no-config --version
+          ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv
+          ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=25 -t 3 -c:v mpeg2video -q:v 2 \
+            -timecode 10:00:00:00 tc.mov
+          ./mpv/build/mpv.com --no-config --vo=null --ao=null -v \
+            --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+          grep "decklink" dummy.log | grep -v "slot " || true
+          grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
+          # Every slot shows the next frame: no repeats or skips once running.
+          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
+            awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
+                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }'
+          # No card on the runner: must fail gracefully, not crash.
+          ./mpv/build/mpv.com --no-config --vo=null --ao=null \
+            --decklink-mirror=auto --length=1 test.mkv > nocard.log 2>&1
+          grep decklink nocard.log
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp mpv/build/mpv.exe mpv/build/mpv.com dist/
+          ldd mpv/build/mpv.exe | awk '{print $3}' | grep -i '^/ucrt64/' | xargs -r -I{} cp {} dist/
+          # mpv also reads its config folders (scripts, script-opts) next to mpv.exe.
+          cp -r scripts script-opts luts README.md LICENSE dist/
+          pacman -Q > dist/versions.txt
+
+      - name: Test package
+        shell: pwsh
+        run: |
+          # Without MSYS2 in PATH, so that missing DLLs are noticed. The scripts
+          # and LUTs next to mpv.exe must be found without any copying.
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $conf = "$env:APPDATA\mpv"
+          New-Item -ItemType Directory -Force $conf | Out-Null
+          Set-Content "$conf\luts.state" "Sony/S-Log3 S-Gamut3.Cine to Rec709.cube"
+          & .\dist\mpv.com --vo=null --ao=null --script=ci/probe.lua --msg-level=all=v tc.mov *> pkg.log
+          $rc = $LASTEXITCODE
+          Remove-Item "$conf\luts.state"
+          Get-Content pkg.log | Select-String "probe|luts\]|smpte_timecode|error" | Select-Object -First 30
+          if ($rc -ne 0) { throw "mpv exited with $rc" }
+          if (Select-String -Path pkg.log -Pattern "Lua error|Creating filter .* failed") { throw "script or filter error" }
+          if (-not (Select-String -Path pkg.log -Pattern 'TC="10:00:00:')) { throw "no timecode" }
+          if (-not (Select-String -Path pkg.log -Pattern 'LUT="Sony / S-Log3 S-Gamut3.Cine to Rec709"')) { throw "no LUT" }
+          if (-not (Select-String -Path pkg.log -Pattern 'PIXFMT=gbrp16')) { throw "LUT filter not active" }
+
+      - name: Zip
+        run: (cd dist && 7z a -tzip ../mpv-tc-win64.zip . > /dev/null)
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mpv-tc-win64
+          path: mpv-tc-win64.zip
+
+  macos:
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash  # -eo pipefail
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mpv-player/mpv
+          ref: ${{ env.MPV_REF }}
+          path: mpv
+          persist-credentials: false
+
+      - name: Install dependencies
+        env:
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+        run: |
+          find /usr/local/bin -lname '*/Library/Frameworks/Python.framework/*' -delete -print || true
+          brew update
+          brew install -q pkgconf meson ninja freetype fribidi little-cms2 jpeg-turbo \
+            luajit libass ffmpeg uchardet libplacebo molten-vk vulkan-loader vulkan-headers
+
+      - name: Apply patches
+        run: |
+          cd mpv
+          for p in ../mpv-patches/*.patch; do
+            echo "Applying $p"
+            git apply --whitespace=nowarn "$p"
+          done
+
+      - name: Build
+        run: |
+          cd mpv
+          meson setup build --buildtype=release -Dlua=luajit \
+            -Dobjc_args="-Wno-error=deprecated -Wno-error=deprecated-declarations" \
+            -D{gl,iconv,lcms2,jpeg,plain-gl,zlib,uchardet}=enabled \
+            -D{cocoa,coreaudio,gl-cocoa,videotoolbox-gl,videotoolbox-pl}=enabled \
+            -D{swift-build,macos-cocoa-cb,macos-media-player,vulkan}=enabled \
+            -Ddecklink=enabled
+          meson compile -C build
+          # Without Swift there is no Xcode rpath to remove, and the grep fails.
+          python3 - <<'PY'
+          f = 'TOOLS/dylib_unhell.py'
+          s = open(f).read()
+          s = s.replace('CommandLineTools"\'', 'CommandLineTools" || true\'')
+          open(f, 'w').write(s)
+          PY
+          meson compile -C build macos-bundle
+
+      - name: Print meson log
+        if: failure()
+        run: cat mpv/build/meson-logs/meson-log.txt
+
+      - name: Test
+        run: |
+          MPV=mpv/build/mpv.app/Contents/MacOS/mpv
+          $MPV --no-config --version
+          grep -q "HAVE_DECKLINK_MAC 1" mpv/build/config.h
+          ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv
+          ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=25 -t 3 -c:v mpeg2video -q:v 2 \
+            -timecode 10:00:00:00 tc.mov
+          $MPV --no-config --vo=null --ao=null -v \
+            --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+          grep "decklink" dummy.log | grep -v "slot " || true
+          grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
+          # Every slot shows the next frame: no repeats or skips once running.
+          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
+            awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
+                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }'
+          # No card on the runner: must fail gracefully, not crash.
+          $MPV --no-config --vo=null --ao=null \
+            --decklink-mirror=auto --length=1 test.mkv > nocard.log 2>&1
+          grep decklink nocard.log
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          ditto mpv/build/mpv.app dist/mpv.app
+          # mpv.app reads Contents/Resources as a config folder (scripts, script-opts).
+          cp -r scripts script-opts luts dist/mpv.app/Contents/Resources/
+          codesign --force -s - dist/mpv.app
+          cp README.md LICENSE dist/
+          brew list --versions > dist/versions.txt
+
+      - name: Test package
+        run: |
+          # No file in the bundle may refer to Homebrew.
+          bad=0
+          while IFS= read -r f; do
+            if file "$f" | grep -q Mach-O && otool -L "$f" | grep -E '/(opt/homebrew|usr/local)/'; then
+              echo "Homebrew reference in $f"; bad=1
+            fi
+          done < <(find dist/mpv.app -type f)
+          [ "$bad" = 0 ]
+          codesign --verify --deep --strict dist/mpv.app
+          # The scripts and LUTs inside mpv.app are found without any copying.
+          # The bundle's mpv.conf selects the GUI mode, which has no terminal output.
+          mkdir -p ~/.config/mpv
+          echo "Sony/S-Log3 S-Gamut3.Cine to Rec709.cube" > ~/.config/mpv/luts.state
+          MPVBUNDLE=true dist/mpv.app/Contents/MacOS/mpv --player-operation-mode=cplayer \
+            --vo=null --ao=null --script=ci/probe.lua --msg-level=all=v tc.mov > pkg.log 2>&1
+          rm ~/.config/mpv/luts.state
+          grep -E "probe|luts\]|smpte_timecode|rror" pkg.log | head -30 || true
+          if grep -E "Lua error|Creating filter .* failed" pkg.log; then exit 1; fi
+          grep -q 'TC="10:00:00:' pkg.log
+          grep -q 'LUT="Sony / S-Log3 S-Gamut3.Cine to Rec709"' pkg.log
+          grep -q 'PIXFMT=gbrp16' pkg.log
+
+      - name: Zip
+        run: ditto -c -k dist mpv-tc-macos-arm64.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mpv-tc-macos-arm64
+          path: mpv-tc-macos-arm64.zip
+
+  publish:
+    needs: [windows, macos]
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.release_tag != '' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid tag: $TAG"; exit 1; }
+          ls -l artifacts
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "mpv_tc" \
+              --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$TAG" artifacts/mpv-tc-win64.zip \
+            artifacts/mpv-tc-macos-arm64.zip --clobber
+          # The Intel macOS build was dropped.
+          gh release delete-asset "$TAG" mpv-tc-macos-x86_64.zip --yes 2> /dev/null || true
+          # Both builds were made from this commit; move the tag only now that
+          # the assets are up.
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$TAG"

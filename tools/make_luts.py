@@ -23,7 +23,8 @@ import colour  # noqa: E402
 SIZE = 33
 
 # Display-linear value of 18% scene grey, and the scene value that reaches
-# display white (about 6.5 stops above grey).
+# display white (about 6.5 stops above grey; lower for curves that end
+# earlier, such as S-Log2, so that their brightest value is still white).
 GREY_OUT = 0.11
 WHITE_IN = 16.0
 CONTRAST = 1.2
@@ -39,30 +40,28 @@ def toe(f):
     return f * f * (1 + TOE) / (f + TOE)
 
 
-def tonescale_params():
+def tonescale_params(white_in):
     # f(x) = m * (x / (x + s)) ** g, then toe(); toe(f(0.18)) = GREY_OUT and
-    # f(WHITE_IN) = 1 (toe(1) = 1).
+    # f(white_in) = 1 (toe(1) = 1).
     g = CONTRAST
     grey = (GREY_OUT + (GREY_OUT ** 2 + 4 * (1 + TOE) * GREY_OUT * TOE) ** 0.5) / (2 * (1 + TOE))
     r = (1 / grey) ** (1 / g)
     lo, hi = 1e-6, 1e3
     for _ in range(200):
         s = (lo + hi) / 2
-        ratio = (WHITE_IN / (WHITE_IN + s)) / (0.18 / (0.18 + s))
+        ratio = (white_in / (white_in + s)) / (0.18 / (0.18 + s))
         if ratio > r:
             hi = s
         else:
             lo = s
-    m = 1 / (WHITE_IN / (WHITE_IN + s)) ** g
+    m = 1 / (white_in / (white_in + s)) ** g
     return m, s, g
 
 
-M, S, G = tonescale_params()
-
-
-def tonescale(x):
+def tonescale(x, params):
+    m, s, g = params
     x = np.maximum(x, 0)
-    return np.clip(toe(M * (x / (x + S)) ** G), 0, 1)
+    return np.clip(toe(m * (x / (x + s)) ** g), 0, 1)
 
 
 def decoder(name, legal=True, **kwargs):
@@ -103,7 +102,8 @@ def make_lut(decode, gamut):
     lin = decode(rgb)
     lin = colour.RGB_to_RGB(lin, colour.RGB_COLOURSPACES[gamut],
                             colour.RGB_COLOURSPACES["ITU-R BT.709"])
-    return tonescale(lin) ** (1 / 2.4)
+    params = tonescale_params(min(WHITE_IN, float(decode(np.array(1.0)))))
+    return tonescale(lin, params) ** (1 / 2.4)
 
 
 def write_cube(path, title, data):

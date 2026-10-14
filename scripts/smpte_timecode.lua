@@ -5,8 +5,8 @@
 -- The start timecode is taken from (in order of priority):
 --   1. the "set-start" script message
 --   2. the start_tc option
---   3. the container metadata exposed by mpv (e.g. MXF)
---   4. ffprobe stream/format tags (e.g. the tmcd track in MOV/MP4)
+--   3. the container or track metadata exposed by mpv (MXF, MOV/MP4 tmcd)
+--   4. ffprobe stream/format tags (other formats)
 --   5. 00:00:00:00
 --
 -- The current timecode is also published as the property
@@ -23,9 +23,10 @@ local options = require 'mp.options'
 local utils = require 'mp.utils'
 
 -- Another copy of this script is already loaded (e.g. from another config
--- folder); that one is in charge.
-if mp.get_script_name() ~= "smpte_timecode" then
-    mp.msg.verbose("Another smpte_timecode.lua is loaded, not doing anything.")
+-- folder): mpv names the second one smpte_timecode2. The first one is in charge.
+if mp.get_script_name():match("^smpte_timecode%d+$") then
+    mp.msg.info("Another smpte_timecode.lua is already loaded, this copy (" ..
+                (mp.get_script_file and mp.get_script_file() or "?") .. ") is not used.")
     return
 end
 
@@ -65,6 +66,8 @@ local state = {
     gen = 0,           -- incremented per file, invalidates stale ffprobe results
     detected = nil,    -- start timecode found in the file
     source = nil,      -- where `detected` came from
+    probing = false,   -- waiting for ffprobe; no timecode is shown meanwhile
+    warned = nil,      -- start timecode already warned about
     runtime_start = nil, -- set via the "set-start" script message
     tc = nil,          -- current timecode string
     info = nil,        -- current info line
@@ -80,7 +83,7 @@ local function parse_tc(str)
     end
     local h, m, s, sep, f =
         str:match("^%s*(%d+)[:;.,](%d%d)[:;.,](%d%d)([:;.,])(%d+)%s*$")
-    if not h then
+    if not h or tonumber(m) >= 60 or tonumber(s) >= 60 then
         return nil
     end
     return {
@@ -200,13 +203,33 @@ local function probe_with_ffprobe(path)
         if gen ~= state.gen or state.detected then
             return
         end
+        state.probing = false
         if not success or not result or result.status ~= 0 then
-            mp.msg.verbose("ffprobe failed: " .. tostring(result and result.stderr or result))
-            return
+            local err = result and (result.error_string ~= "" and result.error_string
+                                    or result.stderr) or tostring(result)
+            if result and result.error_string == "init" then
+                -- Not installed: say so once, not for every file.
+                if not state.ffprobe_missing then
+                    mp.msg.warn("Could not run '" .. opts.ffprobe_path .. "' (set " ..
+                                "ffprobe_path); the start timecode of some formats is unknown.")
+                end
+                state.ffprobe_missing = true
+            else
+                mp.msg.warn("ffprobe failed, the start timecode is unknown: " .. tostring(err))
+            end
+        else
+            local tc = pick_ffprobe_tc(utils.parse_json(result.stdout or ""))
+            if tc then
+                state.detected, state.source = tc, "ffprobe"
+            end
         end
-        local tc = pick_ffprobe_tc(utils.parse_json(result.stdout or ""))
-        if tc then
-            state.detected, state.source = tc, "ffprobe"
+        update()
+    end)
+    -- Do not leave the timecode hidden if ffprobe hangs (e.g. on a slow share).
+    mp.add_timeout(5, function()
+        if gen == state.gen and state.probing then
+            state.probing = false
+            mp.msg.warn("ffprobe takes too long; showing the timecode from 00:00:00:00.")
             update()
         end
     end)
@@ -215,8 +238,16 @@ end
 local function detect_start()
     state.gen = state.gen + 1
     state.detected, state.source = nil, nil
+    state.probing = false
+    state.warned = nil
 
-    local tc = find_tc(mp.get_property_native("metadata"))
+    -- mpv exposes the container tags (MXF) and the stream tags (the tmcd
+    -- timecode of MOV/MP4 is on the video track).
+    local tc = find_tc(mp.get_property_native("metadata")) or
+               find_tc(mp.get_property_native("current-tracks/video/metadata"))
+    for _, track in ipairs(mp.get_property_native("track-list", {})) do
+        tc = tc or find_tc(track.metadata)
+    end
     if tc then
         state.detected, state.source = tc, "metadata"
         return
@@ -224,6 +255,7 @@ local function detect_start()
 
     local path = mp.get_property("path")
     if opts.use_ffprobe and path and (opts.ffprobe_network or not is_network(path)) then
+        state.probing = true
         probe_with_ffprobe(path)
     end
 end
@@ -312,7 +344,7 @@ update = function()
     local rate = fps and rate_info(fps)
     local tc
 
-    if t and rate then
+    if t and rate and not state.probing then
         local start, source = active_start()
         local df
         if not can_drop_frame(rate) or opts.drop_frame == "no" then
@@ -322,8 +354,16 @@ update = function()
         else
             df = start ~= nil and start.df
         end
+        if start and start.f >= rate.nominal and state.warned ~= rate.nominal then
+            mp.msg.warn(string.format("Start timecode frame %d is out of range for %s fps.",
+                                      start.f, format_fps(rate.fps)))
+            state.warned = rate.nominal
+        end
         local start_frames = start and tc_to_frames(start, rate.nominal, df) or 0
-        local frame = math.floor(t * rate.fps + 0.5)
+        -- Frames shown in between (deinterlaced fields, a higher output rate)
+        -- keep the timecode of the frame they belong to; the tolerance absorbs
+        -- rounded timestamps.
+        local frame = math.floor(t * rate.fps + 0.25)
         tc = frames_to_tc(start_frames + frame, rate.nominal, df)
         state.info = string.format("%s %s | %s", format_fps(rate.fps), df and "DF" or "NDF", source)
     end
@@ -377,12 +417,26 @@ local function publish_enabled()
     mp.set_property_native("user-data/smpte_timecode-overlay", opts.enabled)
 end
 
-options.read_options(opts, "smpte_timecode", function()
+local bind_toggle
+
+options.read_options(opts, "smpte_timecode", function(changed)
     state.rendered = nil
+    if changed.key_toggle then
+        bind_toggle()
+    end
+    if (changed.use_ffprobe or changed.ffprobe_path or changed.ffprobe_network) and
+       mp.get_property("path")
+    then
+        detect_start()
+    end
     publish_enabled()
     update()
 end)
-load_enabled()
+-- An explicit --script-opts=smpte_timecode-enabled=... wins over the saved state.
+local cmdline_opts = mp.get_property_native("options/script-opts", {})
+if cmdline_opts["smpte_timecode-enabled"] == nil then
+    load_enabled()
+end
 publish_enabled()
 
 mp.register_event("file-loaded", function()
@@ -405,15 +459,23 @@ mp.observe_property("osd-dimensions", "native", function()
     render()
 end)
 
-mp.add_key_binding(opts.key_toggle ~= "" and opts.key_toggle or nil, "toggle", function()
+local function toggle()
     opts.enabled = not opts.enabled
     publish_enabled()
     save_enabled()
     render()
     mp.osd_message("SMPTE timecode: " .. (opts.enabled and "on" or "off"))
-end)
+end
+
+bind_toggle = function()
+    mp.remove_key_binding("toggle")
+    mp.add_key_binding(opts.key_toggle ~= "" and opts.key_toggle or nil, "toggle", toggle)
+end
+bind_toggle()
 
 -- script-message-to smpte_timecode set-start 01:00:00:00
+-- Drop-frame: quote it, as ';' separates mpv commands:
+-- script-message-to smpte_timecode set-start "01:00:00;00" (or 01:00:00.00)
 -- Without an argument, reverts to the detected start timecode.
 mp.register_script_message("set-start", function(str)
     local tc = parse_tc(str)

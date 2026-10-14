@@ -1,7 +1,7 @@
 # Патчи к mpv
 
 Применяются к mpv `v0.41.0` (`git apply mpv-patches/*.patch`), собираются
-workflow `.github/workflows/windows-build.yml` и `.github/workflows/macos-build.yml`.
+workflow `.github/workflows/build.yml`.
 
 - `0001-vo-add-DeckLink-mirror-output.patch` — вывод на карты Blackmagic
   DeckLink/UltraStudio (`--decklink-mirror`).
@@ -19,3 +19,10 @@ workflow `.github/workflows/windows-build.yml` и `.github/workflows/macos-build
   подменю скрипта открываются поверх меню.
 - `0008-osc-smpte-timecode.patch` — встроенный OSC показывает SMPTE-таймкод (то же, что
   `osc/osc.lua`), копировать `osc.lua` и ставить `osc=no` не нужно.
+- `0009-decklink-fixes-from-review.patch` — исправления по ревизии кода: буфер кадров растёт по
+  частоте кадров и задержке (не было пропусков при `decklink-delay` и 50/60p), время показа для
+  `--video-sync=display-*`, устойчивый выбор режима для файлов без частоты кадров, учёт обрезки
+  (`--video-crop`), допустимый диапазон SDI-кодов, закрытие вывода до VO, смена
+  `decklink-delay` без перезапуска, синхронизация звука на старте без двойного учёта задержки.
+- `0010-select-decklink-menu-fixes.patch` — меню DeckLink сохраняет только выбранное в меню,
+  выделяет текущую карту по номеру или части имени, показывает, работает ли вывод.
