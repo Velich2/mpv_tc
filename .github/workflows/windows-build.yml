@@ -97,10 +97,23 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist/mpv_tc
+          mkdir -p dist
           cp mpv/build/mpv.exe mpv/build/mpv.com dist/
           ldd mpv/build/mpv.exe | awk '{print $3}' | grep -i '^/ucrt64/' | xargs -r -I{} cp {} dist/
-          cp -r scripts script-opts osc luts README.md LICENSE dist/mpv_tc/
+          # mpv also reads its config folders (scripts, script-opts) next to mpv.exe.
+          cp -r scripts script-opts luts README.md LICENSE dist/
+
+      - name: Test package
+        run: |
+          # The scripts and LUTs next to mpv.exe are found without any copying.
+          conf="$(cygpath "$APPDATA")/mpv"
+          mkdir -p "$conf"
+          echo "Sony/S-Log3 S-Gamut3.Cine to Rec709.cube" > "$conf/luts.state"
+          ./dist/mpv.com --vo=null --ao=null --length=1 --msg-level=all=debug test.mkv > pkg.log 2>&1
+          rm "$conf/luts.state"
+          grep -E "smpte_timecode|luts\]" pkg.log | head -20
+          grep -q "Loading lua script .*smpte_timecode.lua" pkg.log
+          grep -q "\[luts\] Applied .*S-Log3 S-Gamut3.Cine to Rec709.cube (cpu)" pkg.log
 
       - uses: actions/upload-artifact@v4
         with:

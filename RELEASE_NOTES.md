@@ -5,8 +5,8 @@
 - **SMPTE-таймкод** `HH:MM:SS:FF` (drop-frame `HH:MM:SS;FF` для 29.97/59.94) поверх видео
   и вместо текущего времени в панели управления (OSC).
 - **LUT-ы** из меню mpv: Sony S-Log3 / S-Log2, ARRI LogC3 / LogC4, Blackmagic Gen 5 /
-  DaVinci Intermediate → Rec.709 BT.1886 в комплекте, можно добавить свои. Применяются и в окне,
-  и на выходе DeckLink.
+  DaVinci Intermediate → Rec.709 BT.1886 в комплекте, можно добавить свои. Считаются на
+  видеокарте; при включённом выводе на DeckLink — на процессоре, чтобы попасть и на карту.
 - **Вывод на карты Blackmagic DeckLink / UltraStudio**: окно mpv работает как обычно,
   а на карту параллельно идёт чистая картинка без OSD и субтитров. Включается из меню mpv.
 
@@ -21,37 +21,31 @@
 
 | Файл / папка | Что это |
 |---|---|
-| `mpv.exe`, `mpv.com`, `*.dll` (Windows) / `mpv.app` (macOS) | mpv 0.41.0 с выводом на DeckLink |
-| `mpv_tc/scripts/smpte_timecode.lua` | скрипт таймкода |
-| `mpv_tc/osc/osc.lua` | панель управления с таймкодом вместо времени |
-| `mpv_tc/script-opts/smpte_timecode.conf` | пример настроек таймкода |
-| `mpv_tc/scripts/luts.lua`, `mpv_tc/luts/` | выбор LUT из меню и набор LUT-ов |
-| `mpv_tc/script-opts/luts.conf` | пример настроек LUT |
-| `mpv_tc/README.md` | полное описание |
-| `mpv_tc/LICENSE` | лицензия (GPL-2.0-or-later) |
+| `mpv.exe`, `mpv.com`, `*.dll` (Windows) / `mpv.app` (macOS) | mpv 0.41.0 с выводом на DeckLink и таймкодом в панели управления |
+| `scripts/smpte_timecode.lua` | таймкод поверх видео |
+| `scripts/luts.lua`, `luts/` | выбор LUT из меню и набор LUT-ов |
+| `script-opts/*.conf` | настройки скриптов с описанием |
+| `README.md`, `LICENSE` | описание и лицензия (GPL-2.0-or-later) |
 
-## Установка (Windows)
+В macOS-сборке `scripts`, `script-opts` и `luts` лежат внутри `mpv.app/Contents/Resources`.
 
-1. Распакуйте архив в любую папку и запускайте `mpv.exe` оттуда.
-   Настройки и скрипты берутся из `%APPDATA%\mpv\`, как у обычного mpv.
-2. Таймкод: скопируйте `mpv_tc\scripts\smpte_timecode.lua` в `%APPDATA%\mpv\scripts\`.
-   Для MOV/MP4 нужен `ffprobe` в `PATH` (или путь в опции `ffprobe_path`).
-3. Таймкод в панели управления (по желанию):
-   - `mpv_tc\osc\osc.lua` → `%APPDATA%\mpv\scripts\osc.lua`;
-   - в `%APPDATA%\mpv\mpv.conf` добавьте строку `osc=no`;
-   - чтобы таймкод не дублировался поверх видео, выключите его `Ctrl+T` или пунктом
-     **Timecode overlay** в меню — выбор запоминается.
-4. LUT-ы (по желанию): `mpv_tc\scripts\luts.lua` → `%APPDATA%\mpv\scripts\`,
-   папку `mpv_tc\luts` → `%APPDATA%\mpv\luts`.
+## Установка
 
-## Установка (macOS)
+Ничего копировать не нужно: mpv находит скрипты и LUT-ы рядом с `mpv.exe` (или внутри
+`mpv.app`) сам, таймкод в панели управления встроен. Свои настройки — как обычно в
+`%APPDATA%\mpv\` (Windows) или `~/.config/mpv/` (macOS); они важнее встроенных.
 
-1. Распакуйте архив и перенесите `mpv.app` в «Программы». Приложение не нотаризовано Apple,
-   поэтому перед первым запуском выполните в Терминале:
-   `xattr -dr com.apple.quarantine /Applications/mpv.app`
-2. Настройки и скрипты берутся из `~/.config/mpv/` — те же шаги, что для Windows, с этой
-   папкой вместо `%APPDATA%\mpv\`. `ffprobe` для MOV/MP4: `brew install ffmpeg`.
-3. Лог и список режимов карты: `/Applications/mpv.app/Contents/MacOS/mpv -v файл`.
+- **Windows:** распакуйте архив в любую папку и запускайте `mpv.exe`.
+- **macOS:** перенесите `mpv.app` в «Программы» и перед первым запуском выполните в Терминале
+  `xattr -dr com.apple.quarantine /Applications/mpv.app` (приложение не нотаризовано Apple).
+  Запуск из Терминала с логом: `MPVBUNDLE=true /Applications/mpv.app/Contents/MacOS/mpv -v файл`.
+- Таймкод MOV/MP4 читается через `ffprobe`: Windows — `ffprobe` в `PATH`,
+  macOS — `brew install ffmpeg`.
+
+**Обновление с прошлого релиза:** удалите скопированные вручную `smpte_timecode.lua`,
+`luts.lua` и `osc.lua` из папки `scripts` в настройках mpv и строку `osc=no` из `mpv.conf`
+(если добавляли её для этого) — иначе будут работать старые копии. Папку `luts` в настройках
+можно оставить только для своих LUT-ов.
 
 ## Вывод на DeckLink
 
@@ -87,10 +81,12 @@
 ## LUT-ы
 
 Меню mpv → **LUT** → папка (Sony, ARRI, Blackmagic) → LUT; **Off** — выключить. Выбор
-запоминается. LUT применяется и в окне, и на выходе DeckLink.
+запоминается. В окне LUT считается на видеокарте; пока включён вывод на DeckLink — на
+процессоре, чтобы попасть и на карту (это тяжелее, особенно в 4K).
 
-Свои LUT-ы (`.cube` 3D/1D, `.3dl`, `.dat`, `.m3d`, `.csp`) кладите в `luts` в папке настроек
-mpv; каждая подпапка — подменю. Вход LUT — видеоуровни, растянутые в 0–1, как в DaVinci
+Свои LUT-ы (`.cube` 3D/1D, `.3dl`, `.dat`, `.m3d`, `.csp`) кладите в папку `luts` в настройках
+mpv (`%APPDATA%\mpv\luts\`, `~/.config/mpv/luts/`) — они появятся в меню рядом со
+встроенными; каждая подпапка — подменю. Вход LUT — видеоуровни, растянутые в 0–1, как в DaVinci
 Resolve, так что LUT-ы производителей для Resolve подходят как есть.
 
 LUT-ы в комплекте — технические преобразования по опубликованным формулам кривых и гамутов

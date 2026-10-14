@@ -17,3 +17,5 @@ workflow `.github/workflows/windows-build.yml` и `.github/workflows/macos-build
   если загружен скрипт `smpte_timecode.lua`.
 - `0007-select-lut-menu-entry.patch` — пункт «LUT» в меню (если загружен `luts.lua`),
   подменю скрипта открываются поверх меню.
+- `0008-osc-smpte-timecode.patch` — встроенный OSC показывает SMPTE-таймкод (то же, что
+  `osc/osc.lua`), копировать `osc.lua` и ставить `osc=no` не нужно.
