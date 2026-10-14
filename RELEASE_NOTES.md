@@ -1,6 +1,6 @@
 # mpv_tc — mpv с SMPTE-таймкодом и выводом на Blackmagic DeckLink
 
-Сборка mpv 0.41.0 для Windows (64 бит) и macOS (Apple Silicon и Intel) с доработками:
+Сборка mpv 0.41.0 для Windows (64 бит) и macOS (Apple Silicon) с доработками:
 
 - **SMPTE-таймкод** `HH:MM:SS:FF` (drop-frame `HH:MM:SS;FF` для 29.97/59.94) поверх видео
   и вместо текущего времени в панели управления (OSC).
@@ -13,7 +13,6 @@
 |---|---|
 | `mpv-tc-win64.zip` | Windows 10/11, 64 бит |
 | `mpv-tc-macos-arm64.zip` | macOS 15+ на Apple Silicon (M1 и новее) |
-| `mpv-tc-macos-x86_64.zip` | macOS 15+ на Intel |
 
 ## Что в архиве
 

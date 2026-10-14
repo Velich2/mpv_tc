@@ -11,7 +11,6 @@ mirrors the video to **Blackmagic DeckLink / UltraStudio** cards.
 
 - Windows: [mpv-tc-win64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip)
 - macOS, Apple Silicon: [mpv-tc-macos-arm64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-arm64.zip)
-- macOS, Intel: [mpv-tc-macos-x86_64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-x86_64.zip)
 
 ### Features
 
@@ -91,8 +90,8 @@ Font, size, position, colors and the other options are listed with comments in
 `mpv-patches/` holds the patches against mpv `v0.41.0`. The **Windows build** GitHub Actions
 workflow applies them, builds with MSYS2 and uploads `mpv.exe` with its DLLs; a manual run
 with `release_tag` publishes the build and `RELEASE_NOTES.md` to that release. The
-**macOS build** workflow builds `mpv.app` with Homebrew libraries (arm64 and x86_64); a manual
-run with `release_tag` attaches the zips to that release.
+**macOS build** workflow builds `mpv.app` with Homebrew libraries (Apple Silicon only); a
+manual run with `release_tag` attaches the zip to that release.
 
 ### License
 
@@ -109,8 +108,7 @@ mpv 0.41.0 для Windows и macOS с выводом на карты Blackmagic 
 
 Скачать ([описание релиза](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC)):
 [Windows](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip) ·
-[macOS Apple Silicon](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-arm64.zip) ·
-[macOS Intel](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-x86_64.zip).
+[macOS Apple Silicon](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-arm64.zip).
 
 ### Что умеет
 
@@ -209,7 +207,7 @@ Desktop Video.
 
 Сборка: GitHub Actions → **Windows build** → артефакт `mpv-decklink-win64`; ручной запуск с `release_tag` публикует сборку и `RELEASE_NOTES.md` в релиз и ставит его тег на собранный коммит
 (`mpv.exe` с DLL; скрипты этого репозитория — в папке `mpv_tc`). **macOS build** собирает
-`mpv.app` (arm64 и x86_64) и с `release_tag` добавляет архивы в релиз.
+`mpv.app` для Apple Silicon и с `release_tag` добавляет архив в релиз.
 
 macOS: `mpv.app` не нотаризован — перед первым запуском
 `xattr -dr com.apple.quarantine /Applications/mpv.app`. Настройки — в `~/.config/mpv/`.
