@@ -99,8 +99,9 @@ jobs:
           # The scripts and LUTs inside mpv.app are found without any copying.
           mkdir -p ~/.config/mpv
           echo "Sony/S-Log3 S-Gamut3.Cine to Rec709.cube" > ~/.config/mpv/luts.state
-          MPVBUNDLE=true dist/mpv.app/Contents/MacOS/mpv --vo=null --ao=null --length=1 --msg-level=all=debug \
-            test.mkv > pkg.log 2>&1
+          # The bundle's mpv.conf selects the GUI mode, which has no terminal output.
+          MPVBUNDLE=true dist/mpv.app/Contents/MacOS/mpv --player-operation-mode=cplayer \
+            --vo=null --ao=null --length=1 --msg-level=all=debug test.mkv > pkg.log 2>&1
           rm ~/.config/mpv/luts.state
           grep -E "smpte_timecode|luts\]" pkg.log | head -20
           grep -q "Loading lua script .*smpte_timecode.lua" pkg.log
