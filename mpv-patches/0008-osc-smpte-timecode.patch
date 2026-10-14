@@ -1,0 +1,153 @@
+From 63c326b81373a4ee6a5063090016159ec596ba2b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 14 Oct 2026 04:06:23 +0000
+Subject: [PATCH] osc.lua: show the SMPTE timecode from smpte_timecode.lua
+
+Same as osc/osc.lua of mpv_tc: the left time shows
+user-data/smpte_timecode when it is published; clicking cycles
+timecode -> time -> time with ms.
+---
+ player/lua/osc.lua | 52 +++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 45 insertions(+), 7 deletions(-)
+
+diff --git a/player/lua/osc.lua b/player/lua/osc.lua
+index b77fe66..b050e10 100644
+--- a/player/lua/osc.lua
++++ b/player/lua/osc.lua
+@@ -1,3 +1,8 @@
++-- mpv v0.41.0 player/lua/osc.lua (LGPLv2.1+) with SMPTE timecode support (mpv_tc).
++-- The left timecode shows user-data/smpte_timecode published by
++-- smpte_timecode.lua; clicking it cycles SMPTE -> time -> time with ms.
++-- Install as scripts/osc.lua and set osc=no in mpv.conf.
++
+ local assdraw = require 'mp.assdraw'
+ local msg = require 'mp.msg'
+ local opt = require 'mp.options'
+@@ -42,6 +47,7 @@ local user_opts = {
+     remaining_playtime = true,  -- display the remaining time in playtime or video-time mode
+                                 -- playtime takes speed into account, whereas video-time doesn't
+     timems = false,             -- display timecodes with milliseconds?
++    smpte_timecode = true,      -- show SMPTE timecode from smpte_timecode.lua on the left
+     tcspace = 100,              -- timecode spacing (compensate font size estimation)
+     visibility = "auto",        -- only used at init to set visibility_mode(...)
+     visibility_modes = "never_auto_always", -- visibility modes to cycle through
+@@ -238,6 +244,8 @@ local state = {
+     active_event_source = nil,              -- the "button" that issued the current event
+     rightTC_trem = not user_opts.timetotal, -- if the right timecode should display total or remaining time
+     tc_ms = user_opts.timems,               -- Should the timecodes display their time with milliseconds
++    tc_smpte = user_opts.smpte_timecode,    -- Should the left timecode display SMPTE timecode
++    smpte_tc = nil,                         -- current SMPTE timecode, nil if not published
+     screen_sizeX = nil, screen_sizeY = nil, -- last screen-resolution, to detect resolution changes to issue reINITs
+     initREQ = false,                        -- is a re-init request pending?
+     marginsREQ = false,                     -- is a margins update pending?
+@@ -318,13 +326,20 @@ local function set_osd(res_x, res_y, text, z)
+     state.osd:update()
+ end
+ 
+-local function set_time_styles(timetotal_changed, timems_changed)
++local function set_time_styles(timetotal_changed, timems_changed, smpte_changed)
+     if timetotal_changed then
+         state.rightTC_trem = not user_opts.timetotal
+     end
+     if timems_changed then
+         state.tc_ms = user_opts.timems
+     end
++    if smpte_changed then
++        state.tc_smpte = user_opts.smpte_timecode
++    end
++end
++
++local function show_smpte()
++    return state.tc_smpte and state.smpte_tc ~= nil
+ end
+ 
+ -- scale factor for translating between real and virtual ASS coordinates
+@@ -1557,9 +1572,11 @@ local function bar_layout(direction, slim)
+     local padY = 3
+     local buttonW = 27
+     local tcW = (state.tc_ms) and 170 or 110
++    local tcW_left = (state.tc_ms or show_smpte()) and 170 or 110
+     if user_opts.tcspace >= 50 and user_opts.tcspace <= 200 then
+         -- adjust our hardcoded font size estimation
+         tcW = tcW * user_opts.tcspace / 100
++        tcW_left = tcW_left * user_opts.tcspace / 100
+     end
+ 
+     local tsW = 90
+@@ -1709,8 +1726,8 @@ local function bar_layout(direction, slim)
+     lo.style = osc_styles.smallButtonsBar
+ 
+     -- Left timecode
+-    geo = { x = geo.x + geo.w + padX + tcW, y = geo.y, an = 6,
+-            w = tcW, h = geo.h }
++    geo = { x = geo.x + geo.w + padX + tcW_left, y = geo.y, an = 6,
++            w = tcW_left, h = geo.h }
+     lo = add_layout("tc_left")
+     lo.geometry = geo
+     lo.style = osc_styles.timecodesBar
+@@ -2096,14 +2113,25 @@ local function osc_init()
+     ne = new_element("tc_left", "button")
+ 
+     ne.content = function ()
+-        if state.tc_ms then
++        if show_smpte() then
++            return state.smpte_tc
++        elseif state.tc_ms then
+             return (mp.get_property_osd("playback-time/full"))
+         else
+             return (mp.get_property_osd("playback-time"))
+         end
+     end
+     ne.eventresponder["mbtn_left_up"] = function ()
+-        state.tc_ms = not state.tc_ms
++        -- cycle SMPTE -> time -> time with ms
++        if show_smpte() then
++            state.tc_smpte = false
++            state.tc_ms = false
++        elseif state.tc_ms then
++            state.tc_smpte = true
++            state.tc_ms = false
++        else
++            state.tc_ms = true
++        end
+         request_init()
+     end
+ 
+@@ -2748,6 +2776,16 @@ mp.observe_property("mute", "bool", request_tick)
+ mp.observe_property("demuxer-cache-state", "native", cache_state)
+ mp.observe_property("vo-configured", "bool", request_tick)
+ mp.observe_property("playback-time", "number", request_tick)
++mp.observe_property("user-data/smpte_timecode", "native", function(_, tc)
++    local available = type(tc) == "string" and tc ~= ""
++    local relayout = available ~= (state.smpte_tc ~= nil)
++    state.smpte_tc = available and tc or nil
++    if relayout then
++        request_init()
++    else
++        request_tick()
++    end
++end)
+ mp.observe_property("osd-dimensions", "native", function()
+     -- (we could use the value instead of re-querying it all the time, but then
+     --  we might have to worry about property update ordering)
+@@ -2955,7 +2993,7 @@ end
+ opt.read_options(user_opts, "osc", function(changed)
+     validate_user_opts()
+     set_osc_styles()
+-    set_time_styles(changed.timetotal, changed.timems)
++    set_time_styles(changed.timetotal, changed.timems, changed.smpte_timecode)
+     if changed.tick_delay or changed.tick_delay_follow_display_fps then
+         set_tick_delay("display_fps", mp.get_property_number("display_fps"))
+     end
+@@ -2967,7 +3005,7 @@ end)
+ 
+ validate_user_opts()
+ set_osc_styles()
+-set_time_styles(true, true)
++set_time_styles(true, true, true)
+ set_tick_delay("display_fps", mp.get_property_number("display_fps"))
+ visibility_mode(user_opts.visibility, true)
+ update_duration_watch()
+-- 
+2.43.0
+

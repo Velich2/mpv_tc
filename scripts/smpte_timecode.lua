@@ -22,6 +22,13 @@ local mp = require 'mp'
 local options = require 'mp.options'
 local utils = require 'mp.utils'
 
+-- Another copy of this script is already loaded (e.g. from another config
+-- folder); that one is in charge.
+if mp.get_script_name() ~= "smpte_timecode" then
+    mp.msg.verbose("Another smpte_timecode.lua is loaded, not doing anything.")
+    return
+end
+
 local opts = {
     enabled = true,          -- initial state; with remember, the last toggle wins
     remember = true,         -- remember the overlay state across restarts

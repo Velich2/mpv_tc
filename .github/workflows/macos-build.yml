@@ -87,9 +87,25 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist/mpv_tc
+          mkdir -p dist
           ditto mpv/build/mpv.app dist/mpv.app
-          cp -r scripts script-opts osc luts README.md LICENSE dist/mpv_tc/
+          # mpv.app reads Contents/Resources as a config folder (scripts, script-opts).
+          cp -r scripts script-opts luts dist/mpv.app/Contents/Resources/
+          codesign --force -s - dist/mpv.app
+          cp README.md LICENSE dist/
+
+      - name: Test package
+        run: |
+          # The scripts and LUTs inside mpv.app are found without any copying.
+          mkdir -p ~/.config/mpv
+          echo "Sony/S-Log3 S-Gamut3.Cine to Rec709.cube" > ~/.config/mpv/luts.state
+          MPVBUNDLE=true dist/mpv.app/Contents/MacOS/mpv --vo=null --ao=null --length=1 --msg-level=all=debug \
+            test.mkv > pkg.log 2>&1
+          rm ~/.config/mpv/luts.state
+          grep -E "smpte_timecode|luts\]" pkg.log | head -20
+          grep -q "Loading lua script .*smpte_timecode.lua" pkg.log
+          grep -q "\[luts\] Applied .*S-Log3 S-Gamut3.Cine to Rec709.cube (cpu)" pkg.log
+          codesign --verify --deep --strict dist/mpv.app
           ditto -c -k dist mpv-tc-macos-arm64.zip
 
       - uses: actions/upload-artifact@v4
