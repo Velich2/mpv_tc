@@ -15,13 +15,16 @@
 --
 -- Options: script-opts/smpte_timecode.conf or --script-opts=smpte_timecode-<name>=<value>
 -- Key binding name: smpte_timecode/toggle
+-- The overlay state is remembered in ~~/smpte_timecode.state (option remember)
+-- and published as user-data/smpte_timecode-overlay.
 
 local mp = require 'mp'
 local options = require 'mp.options'
 local utils = require 'mp.utils'
 
 local opts = {
-    enabled = true,
+    enabled = true,          -- initial state; with remember, the last toggle wins
+    remember = true,         -- remember the overlay state across restarts
     -- top-left, top-center, top-right, bottom-left, bottom-center, bottom-right
     position = "top-right",
     font = "monospace",
@@ -327,10 +330,53 @@ end
 
 -- Events and bindings ------------------------------------------------------
 
+local STATE_FILE = "~~/smpte_timecode.state"
+
+local function state_path()
+    if not opts.remember or not mp.get_property_bool("config") then
+        return nil
+    end
+    return mp.command_native({"expand-path", STATE_FILE})
+end
+
+local function load_enabled()
+    local path = state_path()
+    local file = path and io.open(path)
+    if not file then
+        return
+    end
+    local saved = file:read("*l")
+    file:close()
+    if saved == "on" or saved == "off" then
+        opts.enabled = saved == "on"
+    end
+end
+
+local function save_enabled()
+    local path = state_path()
+    if not path then
+        return
+    end
+    local file = io.open(path, "w")
+    if not file then
+        mp.msg.warn("Could not save the overlay state to " .. path)
+        return
+    end
+    file:write(opts.enabled and "on" or "off", "\n")
+    file:close()
+end
+
+local function publish_enabled()
+    mp.set_property_native("user-data/smpte_timecode-overlay", opts.enabled)
+end
+
 options.read_options(opts, "smpte_timecode", function()
     state.rendered = nil
+    publish_enabled()
     update()
 end)
+load_enabled()
+publish_enabled()
 
 mp.register_event("file-loaded", function()
     state.runtime_start = nil
@@ -354,6 +400,8 @@ end)
 
 mp.add_key_binding(opts.key_toggle ~= "" and opts.key_toggle or nil, "toggle", function()
     opts.enabled = not opts.enabled
+    publish_enabled()
+    save_enabled()
     render()
     mp.osd_message("SMPTE timecode: " .. (opts.enabled and "on" or "off"))
 end)

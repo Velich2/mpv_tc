@@ -35,8 +35,8 @@ mirrors the video to **Blackmagic DeckLink / UltraStudio** cards.
 3. Optional, timecode in the OSC:
    - copy `mpv_tc\osc\osc.lua` to `%APPDATA%\mpv\scripts\osc.lua`;
    - add `osc=no` to `%APPDATA%\mpv\mpv.conf`;
-   - to hide the overlay, copy `mpv_tc\script-opts\smpte_timecode.conf` to
-     `%APPDATA%\mpv\script-opts\` and set `enabled=no` in that copy.
+   - to hide the overlay over the video, press `Ctrl+T` or pick **Timecode overlay** in the
+     menu; the choice is remembered.
 
 ### Install (macOS build)
 
@@ -47,7 +47,8 @@ mirrors the video to **Blackmagic DeckLink / UltraStudio** cards.
    `mpv_tc/scripts/smpte_timecode.lua` to `~/.config/mpv/scripts/`; for MOV/MP4 timecode
    install `ffprobe` (`brew install ffmpeg`) or set `ffprobe_path`.
 3. Optional, timecode in the OSC: copy `mpv_tc/osc/osc.lua` to `~/.config/mpv/scripts/osc.lua`
-   and add `osc=no` to `~/.config/mpv/mpv.conf` (the overlay is hidden as on Windows).
+   and add `osc=no` to `~/.config/mpv/mpv.conf`; hide the overlay with `Ctrl+T` or
+   **Timecode overlay** in the menu.
 
 The script alone works with any mpv on any OS: copy it to `~/.config/mpv/scripts/`.
 
@@ -77,7 +78,7 @@ from the GPU (use `--hwdec=auto-copy` if needed). On macOS, run
 
 | Action | How |
 |---|---|
-| Toggle the overlay | `Ctrl+T` (`script-binding smpte_timecode/toggle`) |
+| Toggle the overlay | `Ctrl+T` (`script-binding smpte_timecode/toggle`) or menu → **Timecode overlay** (patched mpv); remembered across restarts (`remember=no` disables) |
 | Set the start timecode | `script-message-to smpte_timecode set-start 01:00:00:00` |
 | Use it elsewhere | property `user-data/smpte_timecode`, e.g. `--term-status-msg='TC ${user-data/smpte_timecode}'` |
 
@@ -136,7 +137,7 @@ Windows: `%APPDATA%\mpv\scripts\` и `%APPDATA%\mpv\script-opts\`.
 
 | Действие | Как |
 |---|---|
-| Вкл/выкл | `Ctrl+T` (опция `key_toggle`) или в `input.conf`: `KEY script-binding smpte_timecode/toggle` |
+| Вкл/выкл | `Ctrl+T` (опция `key_toggle`), в `input.conf`: `KEY script-binding smpte_timecode/toggle`, или меню mpv → **Timecode overlay** (в сборках этого репозитория). Состояние запоминается в `smpte_timecode.state` в папке настроек |
 | Задать старт | `script-message-to smpte_timecode set-start 01:00:00:00` |
 | Сбросить старт из `set-start` | `script-message-to smpte_timecode set-start` |
 
@@ -157,13 +158,8 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
    ```
    osc=no
    ```
-3. Чтобы таймкод не дублировался поверх видео, в `script-opts/smpte_timecode.conf` в папке
-   настроек mpv (Windows: `%APPDATA%\mpv\script-opts\smpte_timecode.conf`; можно скопировать
-   пример из этого репозитория):
-   ```
-   enabled=no
-   ```
-   `Ctrl+T` по-прежнему включает и выключает таймкод поверх видео.
+3. Чтобы таймкод не дублировался поверх видео, выключите его `Ctrl+T` или пунктом
+   **Timecode overlay** в меню mpv — выбор запоминается.
 
 Клик по таймкоду в OSC переключает: таймкод → время → время с миллисекундами → таймкод.
 Показ по умолчанию отключается в `script-opts/osc.conf`: `smpte_timecode=no`.
@@ -176,7 +172,8 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 
 | Опция | По умолчанию | Описание |
 |---|---|---|
-| `enabled` | `yes` | Показывать при запуске |
+| `enabled` | `yes` | Показывать при первом запуске |
+| `remember` | `yes` | Запоминать последнее состояние (`Ctrl+T`, меню); `no` — всегда `enabled` |
 | `position` | `top-right` | `top-left`, `top-center`, `top-right`, `bottom-left`, `bottom-center`, `bottom-right` |
 | `font` | `monospace` | Шрифт |
 | `font_size` | `36` | Размер (относительно OSD высотой 720) |

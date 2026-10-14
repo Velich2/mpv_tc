@@ -1,0 +1,37 @@
+From c3e6278284ef4d5a61dc7a48b9d5faafa0bdae58 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 14 Oct 2026 02:31:26 +0000
+Subject: [PATCH] select.lua: add a timecode overlay toggle to the menu
+
+Shown when the smpte_timecode script publishes
+user-data/smpte_timecode-overlay.
+---
+ player/lua/select.lua | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/player/lua/select.lua b/player/lua/select.lua
+index 074f6f4..6a17e7c 100644
+--- a/player/lua/select.lua
++++ b/player/lua/select.lua
+@@ -781,6 +781,9 @@ mp.add_key_binding(nil, "menu", function ()
+ 
+     local image_sub_codecs = {["dvd_subtitle"] = true, ["hdmv_pgs_subtitle"] = true}
+ 
++    -- Published by the smpte_timecode script, if it is loaded.
++    local timecode_overlay = mp.get_property_native("user-data/smpte_timecode-overlay")
++
+     for _, track in pairs(mp.get_property_native("track-list")) do
+         if track.type == "sub" then
+             sub_track_count = sub_track_count + 1
+@@ -809,6 +812,8 @@ mp.add_key_binding(nil, "menu", function ()
+         {"Audio devices", "script-binding select/select-audio-device", audio_track_count > 0},
+         {"DeckLink output" .. (mp.get_property("decklink-mirror", "") ~= "" and " (on)" or ""),
+          "script-binding select/select-decklink", decklink_supported()},
++        {"Timecode overlay: " .. (timecode_overlay and "on" or "off"),
++         "script-binding smpte_timecode/toggle", timecode_overlay ~= nil},
+         {"Key bindings", "script-binding select/select-binding", true},
+         {"History", "script-binding select/select-watch-history", true},
+         {"Watch later", "script-binding select/select-watch-later", true},
+-- 
+2.43.0
+

@@ -13,3 +13,5 @@ workflow `.github/workflows/windows-build.yml` и `.github/workflows/macos-build
   явно заданные в командной строке или `mpv.conf`.
 - `0005-decklink-macos-backend.patch` — вывод на DeckLink в macOS (C++ API Desktop Video,
   заголовки SDK 12.0 для macOS).
+- `0006-select-timecode-overlay-menu-entry.patch` — пункт «Timecode overlay: on/off» в меню,
+  если загружен скрипт `smpte_timecode.lua`.
