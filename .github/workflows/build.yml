@@ -251,10 +251,14 @@ jobs:
 
       - name: Test package
         run: |
-          # No file in the bundle may refer to Homebrew.
+          # No binary in the bundle may load a library from Homebrew (its own
+          # install name does not matter).
           bad=0
           while IFS= read -r f; do
-            if file "$f" | grep -q Mach-O && otool -L "$f" | grep -E '/(opt/homebrew|usr/local)/'; then
+            file "$f" | grep -q Mach-O || continue
+            if otool -l "$f" | awk '/cmd LC_LOAD(_WEAK)?_DYLIB/ { getline; getline; print $2 }' |
+               grep -E '^/(opt/homebrew|usr/local)/'
+            then
               echo "Homebrew reference in $f"; bad=1
             fi
           done < <(find dist/mpv.app -type f)
