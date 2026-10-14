@@ -15,3 +15,5 @@ workflow `.github/workflows/windows-build.yml` и `.github/workflows/macos-build
   заголовки SDK 12.0 для macOS).
 - `0006-select-timecode-overlay-menu-entry.patch` — пункт «Timecode overlay: on/off» в меню,
   если загружен скрипт `smpte_timecode.lua`.
+- `0007-select-lut-menu-entry.patch` — пункт «LUT» в меню (если загружен `luts.lua`),
+  подменю скрипта открываются поверх меню.

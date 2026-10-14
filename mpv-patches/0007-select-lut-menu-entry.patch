@@ -1,0 +1,45 @@
+From e270f5529979e3b9c5a6d07426563d462d587d0b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 14 Oct 2026 02:42:34 +0000
+Subject: [PATCH] select.lua: add a LUT entry to the menu
+
+Shown when the luts script publishes user-data/lut; keeps the console
+open for the script's LUT submenus.
+---
+ player/lua/select.lua | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/player/lua/select.lua b/player/lua/select.lua
+index 6a17e7c..4551b1f 100644
+--- a/player/lua/select.lua
++++ b/player/lua/select.lua
+@@ -783,6 +783,8 @@ mp.add_key_binding(nil, "menu", function ()
+ 
+     -- Published by the smpte_timecode script, if it is loaded.
+     local timecode_overlay = mp.get_property_native("user-data/smpte_timecode-overlay")
++    -- Published by the luts script, if it is loaded.
++    local lut = mp.get_property_native("user-data/lut")
+ 
+     for _, track in pairs(mp.get_property_native("track-list")) do
+         if track.type == "sub" then
+@@ -814,6 +816,7 @@ mp.add_key_binding(nil, "menu", function ()
+          "script-binding select/select-decklink", decklink_supported()},
+         {"Timecode overlay: " .. (timecode_overlay and "on" or "off"),
+          "script-binding smpte_timecode/toggle", timecode_overlay ~= nil},
++        {"LUT: " .. ((lut or "") ~= "" and lut or "off"), "script-binding luts/select", lut ~= nil},
+         {"Key bindings", "script-binding select/select-binding", true},
+         {"History", "script-binding select/select-watch-history", true},
+         {"Watch later", "script-binding select/select-watch-later", true},
+@@ -843,7 +846,8 @@ mp.add_key_binding(nil, "menu", function ()
+         submit = function (i)
+             mp.command(commands[i])
+ 
+-            if not commands[i]:find("^script%-binding select/select") then
++            if not commands[i]:find("^script%-binding select/select") and
++               not commands[i]:find("^script%-binding luts/select") then
+                 input.terminate()
+             end
+         end,
+-- 
+2.43.0
+

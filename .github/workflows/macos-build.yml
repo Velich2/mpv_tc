@@ -89,7 +89,7 @@ jobs:
         run: |
           mkdir -p dist/mpv_tc
           ditto mpv/build/mpv.app dist/mpv.app
-          cp -r scripts script-opts osc README.md LICENSE dist/mpv_tc/
+          cp -r scripts script-opts osc luts README.md LICENSE dist/mpv_tc/
           ditto -c -k dist mpv-tc-macos-arm64.zip
 
       - uses: actions/upload-artifact@v4
