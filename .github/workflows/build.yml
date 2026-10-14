@@ -109,10 +109,11 @@ jobs:
           ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=25 -t 3 -c:v mpeg2video -q:v 2 \
             -timecode 10:00:00:00 tc.mov
           ./mpv/build/mpv.com --no-config --vo=null --ao=null -v \
-            --msg-time --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+            --msg-time --framedrop=no --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
           grep "decklink" dummy.log | grep -v "slot " || true
           grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
-          # Every slot shows the next frame: no repeats or skips once running.
+          # Every slot shows the next frame: no repeats or skips once running
+          # (frame dropping is off, as busy CI machines would drop frames).
           grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
             awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
                  END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }' ||
@@ -226,10 +227,11 @@ jobs:
           ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=25 -t 3 -c:v mpeg2video -q:v 2 \
             -timecode 10:00:00:00 tc.mov
           $MPV --no-config --vo=null --ao=null -v \
-            --msg-time --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+            --msg-time --framedrop=no --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
           grep "decklink" dummy.log | grep -v "slot " || true
           grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
-          # Every slot shows the next frame: no repeats or skips once running.
+          # Every slot shows the next frame: no repeats or skips once running
+          # (frame dropping is off, as busy CI machines would drop frames).
           grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
             awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
                  END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }' ||
