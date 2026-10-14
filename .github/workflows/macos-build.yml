@@ -20,15 +20,7 @@ env:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -97,13 +89,13 @@ jobs:
         run: |
           mkdir -p dist/mpv_tc
           ditto mpv/build/mpv.app dist/mpv.app
-          cp -r scripts script-opts osc README.md LICENSE dist/mpv_tc/
-          ditto -c -k dist mpv-tc-macos-${{ matrix.arch }}.zip
+          cp -r scripts script-opts osc luts README.md LICENSE dist/mpv_tc/
+          ditto -c -k dist mpv-tc-macos-arm64.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mpv-tc-macos-${{ matrix.arch }}
-          path: mpv-tc-macos-${{ matrix.arch }}.zip
+          name: mpv-tc-macos-arm64
+          path: mpv-tc-macos-arm64.zip
 
       - name: Attach to release
         if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
@@ -112,4 +104,7 @@ jobs:
           TAG: ${{ inputs.release_tag }}
         run: |
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" \
-            mpv-tc-macos-${{ matrix.arch }}.zip --clobber
+            mpv-tc-macos-arm64.zip --clobber
+          # The Intel build was dropped.
+          gh release delete-asset "$TAG" mpv-tc-macos-x86_64.zip \
+            --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true

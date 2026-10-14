@@ -1,9 +1,12 @@
 # mpv_tc — mpv с SMPTE-таймкодом и выводом на Blackmagic DeckLink
 
-Сборка mpv 0.41.0 для Windows (64 бит) и macOS (Apple Silicon и Intel) с доработками:
+Сборка mpv 0.41.0 для Windows (64 бит) и macOS (Apple Silicon) с доработками:
 
 - **SMPTE-таймкод** `HH:MM:SS:FF` (drop-frame `HH:MM:SS;FF` для 29.97/59.94) поверх видео
   и вместо текущего времени в панели управления (OSC).
+- **LUT-ы** из меню mpv: Sony S-Log3 / S-Log2, ARRI LogC3 / LogC4, Blackmagic Gen 5 /
+  DaVinci Intermediate → Rec.709 BT.1886 в комплекте, можно добавить свои. Применяются и в окне,
+  и на выходе DeckLink.
 - **Вывод на карты Blackmagic DeckLink / UltraStudio**: окно mpv работает как обычно,
   а на карту параллельно идёт чистая картинка без OSD и субтитров. Включается из меню mpv.
 
@@ -13,7 +16,6 @@
 |---|---|
 | `mpv-tc-win64.zip` | Windows 10/11, 64 бит |
 | `mpv-tc-macos-arm64.zip` | macOS 15+ на Apple Silicon (M1 и новее) |
-| `mpv-tc-macos-x86_64.zip` | macOS 15+ на Intel |
 
 ## Что в архиве
 
@@ -23,6 +25,8 @@
 | `mpv_tc/scripts/smpte_timecode.lua` | скрипт таймкода |
 | `mpv_tc/osc/osc.lua` | панель управления с таймкодом вместо времени |
 | `mpv_tc/script-opts/smpte_timecode.conf` | пример настроек таймкода |
+| `mpv_tc/scripts/luts.lua`, `mpv_tc/luts/` | выбор LUT из меню и набор LUT-ов |
+| `mpv_tc/script-opts/luts.conf` | пример настроек LUT |
 | `mpv_tc/README.md` | полное описание |
 | `mpv_tc/LICENSE` | лицензия (GPL-2.0-or-later) |
 
@@ -35,8 +39,10 @@
 3. Таймкод в панели управления (по желанию):
    - `mpv_tc\osc\osc.lua` → `%APPDATA%\mpv\scripts\osc.lua`;
    - в `%APPDATA%\mpv\mpv.conf` добавьте строку `osc=no`;
-   - чтобы таймкод не дублировался поверх видео, в
-     `%APPDATA%\mpv\script-opts\smpte_timecode.conf` добавьте `enabled=no`.
+   - чтобы таймкод не дублировался поверх видео, выключите его `Ctrl+T` или пунктом
+     **Timecode overlay** в меню — выбор запоминается.
+4. LUT-ы (по желанию): `mpv_tc\scripts\luts.lua` → `%APPDATA%\mpv\scripts\`,
+   папку `mpv_tc\luts` → `%APPDATA%\mpv\luts`.
 
 ## Установка (macOS)
 
@@ -78,11 +84,23 @@
 - При аппаратном декодировании кадры копируются из видеопамяти; при проблемах — `hwdec=auto-copy`.
 - На 4K-материале при подёргиваниях на выходе карты помогает `zimg-threads=4`.
 
+## LUT-ы
+
+Меню mpv → **LUT** → папка (Sony, ARRI, Blackmagic) → LUT; **Off** — выключить. Выбор
+запоминается. LUT применяется и в окне, и на выходе DeckLink.
+
+Свои LUT-ы (`.cube` 3D/1D, `.3dl`, `.dat`, `.m3d`, `.csp`) кладите в `luts` в папке настроек
+mpv; каждая подпапка — подменю. Вход LUT — видеоуровни, растянутые в 0–1, как в DaVinci
+Resolve, так что LUT-ы производителей для Resolve подходят как есть.
+
+LUT-ы в комплекте — технические преобразования по опубликованным формулам кривых и гамутов
+с нейтральной кривой (18% серого → 40%); это не официальные LUT-ы производителей.
+
 ## Управление таймкодом
 
 | Действие | Как |
 |---|---|
-| Таймкод поверх видео вкл/выкл | `Ctrl+T` |
+| Таймкод поверх видео вкл/выкл | `Ctrl+T` или меню → **Timecode overlay**; запоминается |
 | Таймкод / время / время с мс в панели | клик по таймкоду в панели |
 | Задать стартовый таймкод | `script-message-to smpte_timecode set-start 01:00:00:00` |
 
