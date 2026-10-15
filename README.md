@@ -52,7 +52,11 @@ formats other than MOV/MP4 and MXF, install `ffprobe` (`brew install ffmpeg`).
 **Updating from an earlier release:** delete the copies made by hand — `smpte_timecode.lua`,
 `luts.lua` and `osc.lua` in the `scripts` folder of your mpv settings, and the `osc=no` line in
 `mpv.conf` (if you added it for this). The included scripts are loaded first and newer copies
-step aside, but old copies would run in addition to them.
+step aside, but old copies would run in addition to them. Also delete the `Sony`, `ARRI` and
+`Blackmagic` folders you copied into the `luts` folder of your settings: copies there are used
+instead of the included LUTs, and the S-Log2 LUT has changed (mpv logs a warning for such a
+copy). Keep the script file names: renamed copies (e.g. `smpte_timecode (1).lua`) are not
+used.
 
 The script alone works with any mpv on any OS: copy it to `~/.config/mpv/scripts/`.
 
@@ -106,8 +110,10 @@ LUTs are read from the `luts` folders of all mpv config folders: the included on
 `~/.config/mpv/luts/`; every subfolder is a submenu. Supported: `.cube` (3D and 1D), `.3dl`,
 `.dat`, `.m3d`, `.csp`. LUT input is the camera RGB with video levels mapped to 0–1, as in
 DaVinci Resolve, so manufacturers' LUTs made for Resolve work as is (including
-`LUT_3D_INPUT_RANGE`); the output is treated as Rec.709 / BT.1886. A `.cube` file with a wrong
-number of entries is refused with a message instead of being applied. Your own `--lut` (e.g. a
+`LUT_3D_INPUT_RANGE 0 1`); the output is treated as Rec.709 / BT.1886. A LUT file that cannot be
+read (e.g. a `.cube` with a wrong number of entries) or a `.cube` with an input range other than
+0–1 is refused with a message instead of being applied; a remembered LUT that fails to load is
+turned off. Your own `--lut` (e.g. a
 display calibration) is replaced while a LUT from the menu is on and restored with **Off**.
 
 Included (`luts/`), all to Rec.709 BT.1886:
@@ -172,7 +178,11 @@ mpv 0.41.0 для Windows и macOS с выводом на карты Blackmagic 
 
 Если обновляетесь с прошлого релиза, удалите скопированные вручную `smpte_timecode.lua`,
 `luts.lua`, `osc.lua` из папки `scripts` настроек mpv и строку `osc=no` из `mpv.conf`:
-встроенные скрипты загружаются первыми, а старые копии работали бы вместе с ними.
+встроенные скрипты загружаются первыми, а старые копии работали бы вместе с ними. Удалите и
+скопированные папки `Sony`, `ARRI`, `Blackmagic` из папки `luts` настроек: копии там
+используются вместо встроенных LUT-ов, а LUT S-Log2 изменился (mpv пишет предупреждение о такой
+копии). Не переименовывайте скрипты: переименованные копии (например,
+`smpte_timecode (1).lua`) не работают.
 
 **Обычный mpv** — скопировать скрипт в папку настроек:
 
@@ -308,8 +318,9 @@ LUT-ы берутся из папок `luts` всех папок настрое�
 `mpv.app`, свои — в `%APPDATA%\mpv\luts\` или `~/.config/mpv/luts/`; каждая подпапка — подменю. Форматы: `.cube` (3D и 1D), `.3dl`, `.dat`,
 `.m3d`, `.csp`. На вход LUT подаётся RGB камеры с видеоуровнями, растянутыми в 0–1, как в
 DaVinci Resolve, — LUT-ы производителей для Resolve подходят без изменений (в том числе с
-`LUT_3D_INPUT_RANGE`). Выход считается Rec.709 / BT.1886. Повреждённый `.cube` не применяется,
-появляется сообщение. Свой `--lut` (например, калибровка монитора) заменяется, пока включён LUT
+`LUT_3D_INPUT_RANGE 0 1`). Выход считается Rec.709 / BT.1886. Нечитаемый LUT (например, `.cube`
+с неверным числом значений) и `.cube` с входным диапазоном не 0–1 не применяются, появляется
+сообщение; запомненный LUT, который не загрузился, выключается. Свой `--lut` (например, калибровка монитора) заменяется, пока включён LUT
 из меню, и возвращается при **Off**.
 
 В комплекте (`luts/`), все в Rec.709 BT.1886: Sony — S-Log3 S-Gamut3.Cine, S-Log3 S-Gamut3,

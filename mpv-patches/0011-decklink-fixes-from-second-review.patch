@@ -1,0 +1,600 @@
+From 2b95566dcdd923b8ad401d7774dd7348fa132901 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 15 Oct 2026 02:07:14 +0000
+Subject: [PATCH] decklink: fixes from second review
+
+- vo: free DR images released by the mirror worker before the VO uninit
+- mirror: size the ring by the content rate with a fixed --decklink-mode
+- mirror: estimate the rate of files without fps from frame timestamps
+  (speed independent, tells 23.976 from 24)
+- mirror: shrink the ring when its limit goes down
+- mirror: repeat the oldest frame instead of black for late slots
+- backends: skip slots that are already due in late callbacks
+- audio: wait for the DeckLink latency before starting audio; keep the
+  previous latency while the output restarts
+- meson: depend on all DeckLink IDL files
+---
+ DOCS/man/options.rst               |   3 +-
+ meson.build                        |  22 ++++-
+ player/audio.c                     |  17 ++++
+ player/core.h                      |   2 +
+ player/video.c                     |   1 +
+ video/out/decklink/backend_mac.cpp |   5 ++
+ video/out/decklink/backend_win.c   |   5 ++
+ video/out/decklink/mirror.c        | 135 +++++++++++++++++++++--------
+ video/out/decklink/mirror.h        |  11 ++-
+ video/out/vo.c                     |  35 ++++++--
+ video/out/vo.h                     |   1 +
+ 11 files changed, 188 insertions(+), 49 deletions(-)
+
+diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
+index 72d5b7e..8bd8256 100644
+--- a/DOCS/man/options.rst
++++ b/DOCS/man/options.rst
+@@ -1212,7 +1212,8 @@ Video
+     ``decklink-latency`` property), so that it matches the DeckLink output
+     rather than the window (default: no). This adds to ``--audio-delay``, which
+     can be used for additional correction, e.g. for the monitor's own latency.
+-    Also available in the ``DeckLink output`` menu entry.
++    The audio starts once the output runs and its latency is known (waiting
++    at most 2 seconds). Also available in the ``DeckLink output`` menu entry.
+ 
+ ``--vd=<...>``
+     Specify a priority list of video decoders to be used, according to their
+diff --git a/meson.build b/meson.build
+index 5e0caf8..cdf4786 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1018,12 +1018,32 @@ if features['decklink'] and features['win32-desktop']
+     sources += custom_target('DeckLinkAPI.h',
+         input: 'video/out/decklink/sdk/DeckLinkAPI.idl',
+         output: 'DeckLinkAPI.h',
++        # Everything DeckLinkAPI.idl includes.
+         depend_files: files('video/out/decklink/sdk/DeckLinkAPIConfiguration.idl',
+                             'video/out/decklink/sdk/DeckLinkAPIDeckControl.idl',
+                             'video/out/decklink/sdk/DeckLinkAPIDiscovery.idl',
+                             'video/out/decklink/sdk/DeckLinkAPIModes.idl',
+                             'video/out/decklink/sdk/DeckLinkAPIStreaming.idl',
+-                            'video/out/decklink/sdk/DeckLinkAPITypes.idl'),
++                            'video/out/decklink/sdk/DeckLinkAPIStreaming_v10_8.idl',
++                            'video/out/decklink/sdk/DeckLinkAPITypes.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v10_11.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v10_2.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v10_4.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v10_5.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v10_6.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v10_8.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v10_9.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v11_4.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v11_5.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v11_5_1.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v7_1.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v7_3.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v7_6.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v7_9.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v8_0.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v8_1.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v9_2.idl',
++                            'video/out/decklink/sdk/DeckLinkAPI_v9_9.idl'),
+         command: [widl, '-I' + meson.current_source_dir() / 'video/out/decklink/sdk',
+                   '-h', '-o', '@OUTPUT@', '@INPUT@'])
+     sources += files('video/out/decklink/backend_win.c')
+diff --git a/player/audio.c b/player/audio.c
+index 243212c..575e0ba 100644
+--- a/player/audio.c
++++ b/player/audio.c
+@@ -271,6 +271,7 @@ void reset_audio_state(struct MPContext *mpctx)
+     mpctx->audio_status = mpctx->ao_chain ? STATUS_SYNCING : STATUS_EOF;
+     mpctx->delay = 0;
+     mpctx->logged_async_diff = -1;
++    mpctx->decklink_wait_until = 0;
+ }
+ 
+ void uninit_audio_out(struct MPContext *mpctx)
+@@ -867,6 +868,21 @@ void audio_start_ao(struct MPContext *mpctx)
+     struct ao_chain *ao_c = mpctx->ao_chain;
+     if (!ao_c || !ao_c->ao || mpctx->audio_status != STATUS_READY)
+         return;
++    // With --decklink-audio-sync, wait (a bounded time) until the DeckLink
++    // output runs and its latency is known, so that the audio starts in sync
++    // instead of video frames being dropped to catch up afterwards.
++    if (mpctx->opts->vo->decklink_audio_sync && mpctx->video_out &&
++        mpctx->vo_chain && vo_decklink_starting(mpctx->video_out))
++    {
++        double now = mp_time_sec();
++        if (!mpctx->decklink_wait_until)
++            mpctx->decklink_wait_until = now + 2;
++        if (now < mpctx->decklink_wait_until) {
++            mp_set_timeout(mpctx, 0.01);
++            return;
++        }
++    }
++    update_audio_delay(mpctx);
+     double pts = MP_NOPTS_VALUE;
+     if (!get_sync_pts(mpctx, &pts))
+         return;
+@@ -887,6 +903,7 @@ void audio_start_ao(struct MPContext *mpctx)
+     }
+ 
+     MP_VERBOSE(mpctx, "starting audio playback\n");
++    mpctx->decklink_wait_until = 0;
+     ao_c->delaying_audio_start = false;
+     ao_start(ao_c->ao);
+     mpctx->audio_status = STATUS_PLAYING;
+diff --git a/player/core.h b/player/core.h
+index 5e69a81..0ed7993 100644
+--- a/player/core.h
++++ b/player/core.h
+@@ -363,6 +363,8 @@ typedef struct MPContext {
+     double time_frame;
+     // Last value of the decklink-latency property, to notify changes.
+     double decklink_latency;
++    // Deadline for waiting for the DeckLink latency before starting audio.
++    double decklink_wait_until;
+     // How much video timing has been changed to make it match the audio
+     // timeline. Used for status line information only.
+     double total_avsync_change;
+diff --git a/player/video.c b/player/video.c
+index 872c490..79ca5f9 100644
+--- a/player/video.c
++++ b/player/video.c
+@@ -1252,6 +1252,7 @@ void write_video(struct MPContext *mpctx)
+     struct vo_frame *frame = vo_frame_ref(&dummy);
+ 
+     double diff = mpctx->past_frames[0].approx_duration;
++    frame->approx_duration = MPMAX(diff, 0);
+     if (opts->untimed || (vo->driver->caps & VO_CAP_UNTIMED))
+         diff = -1; // disable frame dropping and aspects of frame timing
+     if (diff >= 0) {
+diff --git a/video/out/decklink/backend_mac.cpp b/video/out/decklink/backend_mac.cpp
+index 43a6920..940407a 100644
+--- a/video/out/decklink/backend_mac.cpp
++++ b/video/out/decklink/backend_mac.cpp
+@@ -154,6 +154,11 @@ HRESULT OutputCallback::ScheduledFrameCompleted(IDeckLinkVideoFrame *frame,
+         // The frame's slot just ended; track the card clock against ours.
+         double sample = now - (p->frame_slot[idx] + 1) * (double)p->frame_ns;
+         p->base += (sample - p->base) * 0.05;
++        // A callback that runs late must not fill a slot that is already
++        // due; the frames for it may be gone. Skip ahead instead.
++        double now_slot = (now - p->base) / (double)p->frame_ns;
++        if (p->next_slot < now_slot + 0.5)
++            p->next_slot = llrint(now_slot) + PREROLL - 1;
+     } else {
+         // Displayed late or dropped: schedule further ahead.
+         if (p->late_frames++ < 10)
+diff --git a/video/out/decklink/backend_win.c b/video/out/decklink/backend_win.c
+index 1a1dab6..1951f92 100644
+--- a/video/out/decklink/backend_win.c
++++ b/video/out/decklink/backend_win.c
+@@ -166,6 +166,11 @@ static HRESULT STDMETHODCALLTYPE cb_ScheduledFrameCompleted(
+         // The frame's slot just ended; track the card clock against ours.
+         double sample = now - (p->frame_slot[idx] + 1) * (double)p->frame_ns;
+         p->base += (sample - p->base) * 0.05;
++        // A callback that runs late must not fill a slot that is already
++        // due; the frames for it may be gone. Skip ahead instead.
++        double now_slot = (now - p->base) / (double)p->frame_ns;
++        if (p->next_slot < now_slot + 0.5)
++            p->next_slot = llrint(now_slot) + PREROLL - 1;
+     } else {
+         // Displayed late or dropped: schedule further ahead.
+         if (p->late_frames++ < 10)
+diff --git a/video/out/decklink/mirror.c b/video/out/decklink/mirror.c
+index 1f8c6cb..f549757 100644
+--- a/video/out/decklink/mirror.c
++++ b/video/out/decklink/mirror.c
+@@ -58,7 +58,7 @@ struct ring_entry {
+ struct pending {
+     struct mp_image *img;
+     int64_t target;
+-    double duration;
++    double fps;                 // estimated rate if no nominal rate, or 0
+ };
+ 
+ struct dl_mirror {
+@@ -71,14 +71,13 @@ struct dl_mirror {
+     // Output latency without the delay; 0 while the output is not running.
+     _Atomic int64_t latency_base_ns;
+     _Atomic int64_t delay_ns;    // --decklink-delay
++    _Atomic bool failed;         // set by the worker, gives up for good
+ 
+     // Worker thread only.
+-    bool opened, started, failed, hdr_warned;
++    bool opened, started, hdr_warned;
+     struct dl_mode mode;
+     int content_w, content_h;
+     double content_fps;
+-    double durations[16];       // recent frame durations, for files without fps
+-    int num_durations, next_duration;
+ 
+     mp_thread thread;
+     mp_mutex lock;
+@@ -89,6 +88,9 @@ struct dl_mirror {
+     int num_pending;
+     struct ring_entry *ring;
+     int num_ring;
++    double pts_hist[64];        // recent frame pts, for files without fps
++    int num_pts;
++    double est_fps;             // last result of estimate_fps()
+ };
+ 
+ static double mode_fps(const struct dl_mode *mode)
+@@ -262,7 +264,9 @@ static void update_latency(struct dl_mirror *m)
+     atomic_store(&m->latency_base_ns, latency);
+ }
+ 
+-static void stop_output(struct dl_mirror *m)
++// keep_latency: the output is restarted right away, so the latency is
++// published once for the new mode instead of dropping to 0 in between.
++static void stop_output(struct dl_mirror *m, bool keep_latency)
+ {
+     if (!m->started)
+         return;
+@@ -271,9 +275,11 @@ static void stop_output(struct dl_mirror *m)
+     mp_mutex_lock(&m->lock);
+     free_ring(m);
+     mp_mutex_unlock(&m->lock);
+-    update_latency(m);
++    if (!keep_latency)
++        update_latency(m);
+ }
+ 
++
+ // Selects and starts the output mode for the given content. fps_exact is
+ // false if fps was derived from frame durations, which jitter.
+ static bool configure(struct dl_mirror *m, int w, int h, double fps,
+@@ -283,11 +289,14 @@ static bool configure(struct dl_mirror *m, int w, int h, double fps,
+     bool is_auto = !user_mode || !user_mode[0] || strcmp(user_mode, "auto") == 0;
+     const struct dl_mode *mode;
+ 
++    // Frames with an unknown rate (e.g. right after a seek) keep the mode.
++    if (fps <= 0 && m->started)
++        fps = m->content_fps;
++
+     if (is_auto) {
+-        // Frames with an unknown rate (e.g. right after a seek) keep the mode.
+-        if (fps <= 0 && m->started)
+-            fps = m->content_fps;
+-        double tolerance = m->content_fps * (fps_exact ? 0.0002 : 0.01);
++        // Estimated rates are already stable (see estimate_fps()), and must
++        // tell 23.976 from 24.
++        double tolerance = fps_exact ? m->content_fps * 0.0002 : 1e-9;
+         if (m->started && w == m->content_w && h == m->content_h &&
+             fabs(fps - m->content_fps) <= tolerance)
+             return true;
+@@ -296,6 +305,8 @@ static bool configure(struct dl_mirror *m, int w, int h, double fps,
+         m->content_fps = fps;
+         mode = find_auto_mode(m, w, h, fps);
+     } else {
++        // Used to size the ring for content faster than the output mode.
++        m->content_fps = fps;
+         if (m->started)
+             return true;
+         mode = find_user_mode(m, user_mode);
+@@ -314,12 +325,13 @@ static bool configure(struct dl_mirror *m, int w, int h, double fps,
+     if (m->started && mode->id == m->mode.id)
+         return true;
+ 
+-    stop_output(m);
++    stop_output(m, true);
+ 
+     m->mode = *mode;
+     if (!m->backend->start(&m->out, &m->mode)) {
+         MP_ERR(m, "Could not start output.\n");
+         m->failed = true;
++        update_latency(m);
+         return false;
+     }
+     m->started = true;
+@@ -394,11 +406,26 @@ static int get_free_entry(struct dl_mirror *m)
+ // Returns -1 if the ring is full; the frame is then dropped.
+ static int acquire_entry(struct dl_mirror *m)
+ {
++    struct mp_image *unused[RING_MAX];
++    int num_unused = 0;
++
+     mp_mutex_lock(&m->lock);
+     int idx = get_free_entry(m);
+-    bool grow = idx < 0 && m->num_ring < ring_limit(m);
++    int limit = ring_limit(m);
++    bool grow = idx < 0 && m->num_ring < limit;
++    // Give back memory when the limit went down (e.g. a smaller delay).
++    while (m->num_ring > limit && num_unused < RING_MAX) {
++        struct ring_entry *e = &m->ring[m->num_ring - 1];
++        if (e->valid || e->busy || e->readers || m->num_ring - 1 == idx)
++            break;
++        unused[num_unused++] = e->img;
++        m->num_ring--;
++    }
+     mp_mutex_unlock(&m->lock);
+ 
++    for (int n = 0; n < num_unused; n++)
++        talloc_free(unused[n]);
++
+     if (grow) {
+         struct mp_image *img = alloc_output_image(&m->mode);
+         if (img) {
+@@ -419,8 +446,8 @@ static int acquire_entry(struct dl_mirror *m)
+     return idx;
+ }
+ 
+-// Frame rates derived from frame durations jitter; use the nearest standard
+-// rate if it is close.
++// Frame rates derived from timestamps jitter; use the nearest standard rate
++// if it is close.
+ static double snap_fps(double fps)
+ {
+     static const double rates[] = {
+@@ -438,27 +465,45 @@ static double snap_fps(double fps)
+     return best;
+ }
+ 
+-static int compare_double(const void *a, const void *b)
+-{
+-    double x = *(const double *)a, y = *(const double *)b;
+-    return x < y ? -1 : x > y;
+-}
++// Frame rate of files without a nominal rate, from the timestamps of recent
++// frames queued to the VO. approx is the decoder's average frame duration in
++// seconds (not adjusted for the playback speed). Timestamp gaps from frames
++// dropped by the player count as multiples of it. The current rate is kept
++// unless the estimate is clearly off, which needs a longer span of frames for
++// close rates such as 23.976 and 24 (container timestamps are often rounded
++// to 1 ms). Returns 0 if unknown. Call with lock held.
++static double estimate_fps(struct dl_mirror *m, double pts, double approx)
++{
++    int max = MP_ARRAY_SIZE(m->pts_hist);
++    if (!(approx > 0))
++        return m->est_fps;
++    if (pts != MP_NOPTS_VALUE) {
++        double last = m->num_pts ? m->pts_hist[m->num_pts - 1] : 0;
++        if (m->num_pts && (pts <= last || pts - last > 1))
++            m->num_pts = 0; // seek or discontinuity
++        if (m->num_pts == max) {
++            memmove(&m->pts_hist[0], &m->pts_hist[1], (max - 1) * sizeof(double));
++            m->num_pts--;
++        }
++        m->pts_hist[m->num_pts++] = pts;
++    }
+ 
+-// Frame rate from the median of recent frame durations (single durations
+-// jitter, and dropped frames show up as double durations). 0 if unknown.
+-static double estimate_fps(struct dl_mirror *m, double duration)
+-{
+-    if (duration > 0) {
+-        m->durations[m->next_duration] = duration;
+-        m->next_duration = (m->next_duration + 1) % MP_ARRAY_SIZE(m->durations);
+-        m->num_durations = MPMIN(m->num_durations + 1, MP_ARRAY_SIZE(m->durations));
++    double fps = 1 / approx, span = 0;
++    int frames = 0;
++    for (int n = 0; n + 1 < m->num_pts; n++) {
++        double diff = m->pts_hist[n + 1] - m->pts_hist[n];
++        long k = lrint(diff / approx);
++        if (k >= 1 && fabs(diff - k * approx) < approx * 0.25) {
++            span += diff;
++            frames += k;
++        }
+     }
+-    if (!m->num_durations)
+-        return 0;
+-    double sorted[MP_ARRAY_SIZE(m->durations)];
+-    memcpy(sorted, m->durations, m->num_durations * sizeof(sorted[0]));
+-    qsort(sorted, m->num_durations, sizeof(sorted[0]), compare_double);
+-    return snap_fps(1e9 / sorted[m->num_durations / 2]);
++    if (frames >= 2)
++        fps = frames / span;
++    double margin = frames >= 2 ? MPMAX(0.0005, 0.0015 / span) : 0.01;
++    if (!(m->est_fps > 0 && fabs(fps - m->est_fps) <= m->est_fps * margin))
++        m->est_fps = snap_fps(fps);
++    return m->est_fps;
+ }
+ 
+ static void process_frame(struct dl_mirror *m, struct pending *p)
+@@ -522,7 +567,7 @@ static void process_frame(struct dl_mirror *m, struct pending *p)
+     double fps = img->nominal_fps;
+     bool fps_exact = fps > 0;
+     if (!fps_exact)
+-        fps = estimate_fps(m, p->duration);
++        fps = p->fps;
+ 
+     if (dw < 1 || dh < 1 || !configure(m, dw, dh, fps, fps_exact))
+         goto done;
+@@ -583,7 +628,7 @@ static MP_THREAD_VOID worker_thread(void *ptr)
+     }
+     mp_mutex_unlock(&m->lock);
+ 
+-    stop_output(m);
++    stop_output(m, false);
+     if (m->opened)
+         m->backend->close(&m->out);
+ 
+@@ -597,13 +642,19 @@ double dl_mirror_fill(struct dl_mirror *m, void *dst, ptrdiff_t stride,
+ 
+     int64_t limit = display_time - m->out.fill_ahead_ns - MARGIN_NS -
+                     atomic_load(&m->delay_ns);
+-    int best = -1;
++    int best = -1, oldest = -1;
+     for (int n = 0; n < m->num_ring; n++) {
+         struct ring_entry *e = &m->ring[n];
+         if (e->valid && e->target <= limit &&
+             (best < 0 || e->target > m->ring[best].target))
+             best = n;
++        if (e->valid && (oldest < 0 || e->target < m->ring[oldest].target))
++            oldest = n;
+     }
++    // A slot filled late (its display time already passed) may need frames
++    // that were dropped meanwhile; repeat the oldest one rather than black.
++    if (best < 0 && display_time < mp_time_ns())
++        best = oldest;
+ 
+     double pts = MP_NOPTS_VALUE;
+     struct mp_image *src = NULL;
+@@ -642,7 +693,7 @@ double dl_mirror_fill(struct dl_mirror *m, void *dst, ptrdiff_t stride,
+ }
+ 
+ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+-                     int64_t target, double duration)
++                     int64_t target, double approx_duration)
+ {
+     if (!img || img->params.force_window)
+         return;
+@@ -653,6 +704,9 @@ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+         target = mp_time_ns();
+ 
+     mp_mutex_lock(&m->lock);
++    double fps = 0;
++    if (!(img->nominal_fps > 0))
++        fps = estimate_fps(m, img->pts, approx_duration);
+     if (m->num_pending == MAX_PENDING) {
+         talloc_free(m->pending[0].img);
+         m->num_pending--;
+@@ -662,7 +716,7 @@ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+     m->pending[m->num_pending++] = (struct pending){
+         .img = ref,
+         .target = target,
+-        .duration = duration,
++        .fps = fps,
+     };
+     mp_cond_signal(&m->wakeup);
+     mp_mutex_unlock(&m->lock);
+@@ -674,6 +728,11 @@ double dl_mirror_get_latency(struct dl_mirror *m)
+     return base ? MP_TIME_NS_TO_S(base + atomic_load(&m->delay_ns)) : 0;
+ }
+ 
++bool dl_mirror_is_starting(struct dl_mirror *m)
++{
++    return !atomic_load(&m->failed) && !atomic_load(&m->latency_base_ns);
++}
++
+ void dl_mirror_set_delay(struct dl_mirror *m, double delay)
+ {
+     atomic_store(&m->delay_ns, MP_TIME_S_TO_NS(delay));
+diff --git a/video/out/decklink/mirror.h b/video/out/decklink/mirror.h
+index b405b14..71a4175 100644
+--- a/video/out/decklink/mirror.h
++++ b/video/out/decklink/mirror.h
+@@ -17,6 +17,7 @@
+ 
+ #pragma once
+ 
++#include <stdbool.h>
+ #include <stddef.h>
+ #include <stdint.h>
+ 
+@@ -35,15 +36,19 @@ struct dl_mirror *dl_mirror_create(struct mpv_global *global);
+ void dl_mirror_destroy(struct dl_mirror *m);
+ 
+ // Called for every new frame queued to the VO. target is the realtime (in
+-// mp_time_ns() units) at which the frame is shown, or 0 for "now". duration
+-// is the approximate frame duration in ns (<= 0 if unknown).
++// mp_time_ns() units) at which the frame is shown, or 0 for "now".
++// approx_duration is the frame duration in seconds, not adjusted for the
++// playback speed (vo_frame.approx_duration; <= 0 if unknown).
+ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+-                     int64_t target, double duration);
++                     int64_t target, double approx_duration);
+ 
+ // How much later than the VO the output shows a frame, in seconds; 0 while the
+ // output is not running.
+ double dl_mirror_get_latency(struct dl_mirror *m);
+ 
++// True while the output has not reported its latency yet and has not failed.
++bool dl_mirror_is_starting(struct dl_mirror *m);
++
+ // Changes --decklink-delay without restarting the output.
+ void dl_mirror_set_delay(struct dl_mirror *m, double delay);
+ 
+diff --git a/video/out/vo.c b/video/out/vo.c
+index 2a51954..042b669 100644
+--- a/video/out/vo.c
++++ b/video/out/vo.c
+@@ -126,6 +126,7 @@ struct vo_internal {
+ #if HAVE_DECKLINK
+     struct dl_mirror *dl_mirror; // protected by lock
+     int64_t dl_last_target;      // protected by lock
++    double dl_last_latency;      // protected by lock
+     // Option values dl_mirror was created with (VO thread only).
+     char *dl_device, *dl_mode;
+     double dl_delay;
+@@ -282,15 +283,15 @@ static void update_decklink(struct vo *vo)
+ 
+     destroy_decklink(vo);
+ 
+-    if (!device[0])
+-        return;
+-    struct dl_mirror *m = dl_mirror_create(vo->global);
++    struct dl_mirror *m = device[0] ? dl_mirror_create(vo->global) : NULL;
+     mp_mutex_lock(&in->lock);
+     in->dl_mirror = m;
++    if (!m)
++        in->dl_last_latency = 0;
+     // Show the current frame right away, e.g. when enabled while paused.
+     if (m && in->current_frame && in->current_frame->current) {
+         dl_mirror_queue(m, in->current_frame->current, 0,
+-                        in->current_frame->duration);
++                        in->current_frame->approx_duration);
+     }
+     mp_mutex_unlock(&in->lock);
+ }
+@@ -988,7 +989,8 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
+ #if HAVE_DECKLINK
+     if (in->dl_mirror) {
+         dl_mirror_queue(in->dl_mirror, frame->current,
+-                        get_decklink_target(vo, frame), frame->duration);
++                        get_decklink_target(vo, frame),
++                        frame->approx_duration);
+     }
+ #endif
+     in->frame_queued = frame;
+@@ -1005,8 +1007,27 @@ double vo_get_decklink_latency(struct vo *vo)
+ #if HAVE_DECKLINK
+     struct vo_internal *in = vo->in;
+     mp_mutex_lock(&in->lock);
+-    if (in->dl_mirror)
++    // While the mirror is recreated or starts, the previous latency is kept
++    // until the new one is known, so that the audio delay changes only once.
++    r = in->dl_last_latency;
++    if (in->dl_mirror && !dl_mirror_is_starting(in->dl_mirror)) {
+         r = dl_mirror_get_latency(in->dl_mirror);
++        in->dl_last_latency = r;
++    }
++    mp_mutex_unlock(&in->lock);
++#endif
++    return r;
++}
++
++// True while the DeckLink mirror is opening the device, before its latency is
++// known.
++bool vo_decklink_starting(struct vo *vo)
++{
++    bool r = false;
++#if HAVE_DECKLINK
++    struct vo_internal *in = vo->in;
++    mp_mutex_lock(&in->lock);
++    r = in->dl_mirror && dl_mirror_is_starting(in->dl_mirror);
+     mp_mutex_unlock(&in->lock);
+ #endif
+     return r;
+@@ -1343,6 +1364,8 @@ static MP_THREAD_VOID vo_thread(void *ptr)
+     // The mirror may hold references to images owned by the VO driver (direct
+     // rendering), so it must be gone before the driver.
+     destroy_decklink(vo);
++    // The mirror worker may have released DR images; free them on this thread.
++    mp_dispatch_queue_process(in->dispatch, 0);
+ #endif
+     forget_frames(vo); // implicitly synchronized
+     talloc_free(in->current_frame);
+diff --git a/video/out/vo.h b/video/out/vo.h
+index 62d658a..3b8feea 100644
+--- a/video/out/vo.h
++++ b/video/out/vo.h
+@@ -533,6 +533,7 @@ bool vo_is_ready_for_frame(struct vo *vo, int64_t next_pts);
+ bool vo_is_visible(struct vo *vo);
+ void vo_queue_frame(struct vo *vo, struct vo_frame *frame);
+ double vo_get_decklink_latency(struct vo *vo);
++bool vo_decklink_starting(struct vo *vo);
+ void vo_wait_frame(struct vo *vo);
+ bool vo_still_displaying(struct vo *vo);
+ void vo_request_wakeup_on_done(struct vo *vo);
+-- 
+2.43.0
+

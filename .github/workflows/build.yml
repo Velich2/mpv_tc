@@ -35,8 +35,77 @@ env:
   MPV_REF: v0.41.0
 
 jobs:
+  # Also runs the GPU (--lut) path of luts.lua, which needs a GPU context
+  # (Mesa's software renderer under Xvfb).
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mpv-player/mpv
+          ref: ${{ env.MPV_REF }}
+          path: mpv
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc meson ninja-build pkg-config \
+            libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev \
+            libswresample-dev libswscale-dev libplacebo-dev libass-dev libluajit-5.1-dev \
+            libzimg-dev libjpeg-turbo8-dev liblcms2-dev libuchardet-dev \
+            libegl-dev libgl-dev libx11-dev libxext-dev libxkbcommon-dev libxpresent-dev \
+            libxrandr-dev libxss-dev xvfb xauth libegl-mesa0 libgl1-mesa-dri ffmpeg python3
+
+      - name: Apply patches
+        run: |
+          cd mpv
+          for p in ../mpv-patches/*.patch; do
+            echo "Applying $p"
+            git apply --whitespace=nowarn "$p"
+          done
+
+      - name: Build
+        run: |
+          cd mpv
+          meson setup build --buildtype=release -Dlibmpv=false -Dlua=luajit \
+            -Dx11=enabled -Dgl=enabled -Dgl-x11=enabled -Degl-x11=enabled \
+            -Dvulkan=disabled -Dwayland=disabled -Ddecklink=enabled
+          meson compile -C build
+
+      - name: Print meson log
+        if: failure()
+        run: cat mpv/build/meson-logs/meson-log.txt
+
+      - name: Test
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          MPV=mpv/build/mpv
+          $MPV --no-config --version
+          ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv
+          $MPV --no-config --vo=null --ao=null -v \
+            --msg-time --framedrop=no --decklink-mirror=dummy --length=2 test.mkv > dummy.log 2>&1
+          grep "decklink" dummy.log | grep -v "slot " || true
+          grep -q "Output 1080p25 (1920x1080) for 1920x800" dummy.log
+          # Every slot shows the next frame: no repeats or skips once running.
+          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
+            awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
+                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }' ||
+            { grep -E "slot|decklink\]|Dropped|frame" dummy.log | head -80; false; }
+
+      - name: Test LUTs (GPU and CPU)
+        timeout-minutes: 10
+        run: xvfb-run -a ci/lut_test.sh mpv/build/mpv .
+
   windows:
     runs-on: windows-latest
+    timeout-minutes: 90
     defaults:
       run:
         shell: msys2 {0}
@@ -102,6 +171,7 @@ jobs:
         run: cat mpv/build/meson-logs/meson-log.txt
 
       - name: Test
+        timeout-minutes: 10
         run: |
           set -o pipefail
           ./mpv/build/mpv.com --no-config --version
@@ -134,6 +204,7 @@ jobs:
 
       - name: Test package
         shell: pwsh
+        timeout-minutes: 10
         run: |
           # Without MSYS2 in PATH, so that missing DLLs are noticed. The scripts
           # and LUTs next to mpv.exe must be found without any copying.
@@ -141,7 +212,9 @@ jobs:
           $conf = "$env:APPDATA\mpv"
           New-Item -ItemType Directory -Force $conf | Out-Null
           Set-Content "$conf\luts.state" "Sony/S-Log3 S-Gamut3.Cine to Rec709.cube"
-          & .\dist\mpv.com --vo=null --ao=null --script=ci/probe.lua --msg-level=all=v tc.mov *> pkg.log
+          # The MOV timecode must come from mpv's metadata, not from ffprobe.
+          & .\dist\mpv.com --vo=null --ao=null --script=ci/probe.lua --msg-level=all=v `
+            --script-opts=smpte_timecode-use_ffprobe=no tc.mov *> pkg.log
           $rc = $LASTEXITCODE
           Remove-Item "$conf\luts.state"
           Get-Content pkg.log | Select-String "probe|luts\]|smpte_timecode|error" | Select-Object -First 30
@@ -162,6 +235,7 @@ jobs:
 
   macos:
     runs-on: macos-15
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash  # -eo pipefail
@@ -219,6 +293,7 @@ jobs:
         run: cat mpv/build/meson-logs/meson-log.txt
 
       - name: Test
+        timeout-minutes: 10
         run: |
           MPV=mpv/build/mpv.app/Contents/MacOS/mpv
           $MPV --no-config --version
@@ -252,6 +327,7 @@ jobs:
           brew list --versions > dist/versions.txt
 
       - name: Test package
+        timeout-minutes: 10
         run: |
           # No binary in the bundle may load a library from Homebrew (its own
           # install name does not matter).
@@ -270,8 +346,11 @@ jobs:
           # The bundle's mpv.conf selects the GUI mode, which has no terminal output.
           mkdir -p ~/.config/mpv
           echo "Sony/S-Log3 S-Gamut3.Cine to Rec709.cube" > ~/.config/mpv/luts.state
+          # The MOV timecode must come from mpv's metadata: Homebrew's ffprobe is
+          # in PATH here, but usually not on users' Macs.
           MPVBUNDLE=true dist/mpv.app/Contents/MacOS/mpv --player-operation-mode=cplayer \
-            --vo=null --ao=null --script=ci/probe.lua --msg-level=all=v tc.mov > pkg.log 2>&1
+            --vo=null --ao=null --script=ci/probe.lua --msg-level=all=v \
+            --script-opts=smpte_timecode-use_ffprobe=no tc.mov > pkg.log 2>&1
           rm ~/.config/mpv/luts.state
           grep -E "probe|luts\]|smpte_timecode|rror" pkg.log | head -30 || true
           if grep -E "Lua error|Creating filter .* failed" pkg.log; then exit 1; fi
@@ -288,11 +367,15 @@ jobs:
           path: mpv-tc-macos-arm64.zip
 
   publish:
-    needs: [windows, macos]
+    needs: [linux, windows, macos]
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.release_tag != '' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # One publish per release at a time; see also the check for the newest commit.
+    concurrency:
+      group: release-${{ inputs.release_tag }}
     permissions:
       contents: write
     steps:
@@ -310,6 +393,13 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid tag: $TAG"; exit 1; }
+          # A run for an older commit that finishes last must not replace the
+          # builds of a newer one.
+          git fetch -q origin main
+          if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
+            echo "::error::main has moved on since this run started; not publishing."
+            exit 1
+          fi
           ls -l artifacts
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release edit "$TAG" --notes-file RELEASE_NOTES.md
