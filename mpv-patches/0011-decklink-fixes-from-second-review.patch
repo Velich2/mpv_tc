@@ -1,4 +1,4 @@
-From 5502229273d62ae4c0e77333b51295cc5548aecf Mon Sep 17 00:00:00 2001
+From 1ed4ed5de2f9f325fccc6725b9c599478fbfd5c1 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 15 Oct 2026 02:07:14 +0000
 Subject: [PATCH] decklink: fixes from second review
@@ -15,17 +15,19 @@ Subject: [PATCH] decklink: fixes from second review
 - meson: depend on all DeckLink IDL files
 ---
  DOCS/man/options.rst               |   3 +-
- meson.build                        |  22 ++++-
+ meson.build                        |  22 +++-
  player/audio.c                     |  17 ++++
  player/core.h                      |   2 +
  player/video.c                     |   1 +
- video/out/decklink/backend_mac.cpp |   5 ++
- video/out/decklink/backend_win.c   |   5 ++
- video/out/decklink/mirror.c        | 135 +++++++++++++++++++++--------
- video/out/decklink/mirror.h        |  11 ++-
- video/out/vo.c                     |  75 ++++++++++++----
+ video/out/decklink/backend.h       |   5 +-
+ video/out/decklink/backend_dummy.c |   2 +
+ video/out/decklink/backend_mac.cpp |   6 ++
+ video/out/decklink/backend_win.c   |   6 ++
+ video/out/decklink/mirror.c        | 155 ++++++++++++++++++++---------
+ video/out/decklink/mirror.h        |  11 +-
+ video/out/vo.c                     |  75 ++++++++++----
  video/out/vo.h                     |   1 +
- 11 files changed, 215 insertions(+), 62 deletions(-)
+ 13 files changed, 236 insertions(+), 70 deletions(-)
 
 diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
 index 72d5b7e..8bd8256 100644
@@ -146,8 +148,38 @@ index 872c490..79ca5f9 100644
      if (opts->untimed || (vo->driver->caps & VO_CAP_UNTIMED))
          diff = -1; // disable frame dropping and aspects of frame timing
      if (diff >= 0) {
+diff --git a/video/out/decklink/backend.h b/video/out/decklink/backend.h
+index c9e4399..b164966 100644
+--- a/video/out/decklink/backend.h
++++ b/video/out/decklink/backend.h
+@@ -39,8 +39,11 @@ struct dl_output {
+     // Set by open().
+     struct dl_mode *modes;
+     int num_modes;
+-    // Set by start(): how much earlier than its display time a slot is filled.
++    // Set by start(): how much earlier than its display time a slot is filled,
++    // and how much later than that it may still be filled (e.g. after the
++    // filling thread stalled); frames that late slots need are kept that long.
+     int64_t fill_ahead_ns;
++    int64_t fill_late_ns;
+     void *priv;
+ };
+ 
+diff --git a/video/out/decklink/backend_dummy.c b/video/out/decklink/backend_dummy.c
+index 6dfa303..ad41262 100644
+--- a/video/out/decklink/backend_dummy.c
++++ b/video/out/decklink/backend_dummy.c
+@@ -115,6 +115,8 @@ static bool dummy_start(struct dl_output *o, const struct dl_mode *mode)
+     p->mode = *mode;
+     p->buf = talloc_size(p, mode->w * 2 * mode->h);
+     o->fill_ahead_ns = PREROLL * MP_TIME_S_TO_NS(mode->duration) / mode->timescale;
++    // Every slot is filled, also after the thread stalled (busy CI machines).
++    o->fill_late_ns = MP_TIME_MS_TO_NS(300);
+     if (p->dump_path && !p->dump) {
+         p->dump = fopen(p->dump_path, "wb");
+         if (!p->dump)
 diff --git a/video/out/decklink/backend_mac.cpp b/video/out/decklink/backend_mac.cpp
-index 43a6920..940407a 100644
+index 43a6920..1b25479 100644
 --- a/video/out/decklink/backend_mac.cpp
 +++ b/video/out/decklink/backend_mac.cpp
 @@ -154,6 +154,11 @@ HRESULT OutputCallback::ScheduledFrameCompleted(IDeckLinkVideoFrame *frame,
@@ -162,8 +194,16 @@ index 43a6920..940407a 100644
      } else {
          // Displayed late or dropped: schedule further ahead.
          if (p->late_frames++ < 10)
+@@ -212,6 +217,7 @@ static bool mac_start(struct dl_output *o, const struct dl_mode *mode)
+     p->mode = *mode;
+     p->frame_ns = MP_TIME_S_TO_NS(mode->duration) / mode->timescale;
+     o->fill_ahead_ns = PREROLL * p->frame_ns;
++    o->fill_late_ns = p->frame_ns; // later slots are skipped
+ 
+     for (int n = 0; n < PREROLL; n++) {
+         hr = p->output->CreateVideoFrame(mode->w, mode->h, mode->w * 2,
 diff --git a/video/out/decklink/backend_win.c b/video/out/decklink/backend_win.c
-index 1a1dab6..1951f92 100644
+index 1a1dab6..8fbc735 100644
 --- a/video/out/decklink/backend_win.c
 +++ b/video/out/decklink/backend_win.c
 @@ -166,6 +166,11 @@ static HRESULT STDMETHODCALLTYPE cb_ScheduledFrameCompleted(
@@ -178,8 +218,16 @@ index 1a1dab6..1951f92 100644
      } else {
          // Displayed late or dropped: schedule further ahead.
          if (p->late_frames++ < 10)
+@@ -242,6 +247,7 @@ static bool win_start(struct dl_output *o, const struct dl_mode *mode)
+     p->mode = *mode;
+     p->frame_ns = MP_TIME_S_TO_NS(mode->duration) / mode->timescale;
+     o->fill_ahead_ns = PREROLL * p->frame_ns;
++    o->fill_late_ns = p->frame_ns; // later slots are skipped
+ 
+     for (int n = 0; n < PREROLL; n++) {
+         hr = IDeckLinkOutput_CreateVideoFrame(p->output, mode->w, mode->h,
 diff --git a/video/out/decklink/mirror.c b/video/out/decklink/mirror.c
-index 1f8c6cb..f549757 100644
+index 1f8c6cb..ba0b637 100644
 --- a/video/out/decklink/mirror.c
 +++ b/video/out/decklink/mirror.c
 @@ -58,7 +58,7 @@ struct ring_entry {
@@ -218,6 +266,17 @@ index 1f8c6cb..f549757 100644
  };
  
  static double mode_fps(const struct dl_mode *mode)
+@@ -245,8 +247,8 @@ static int ring_limit(struct dl_mirror *m)
+     double fps = MPMAX(m->content_fps, mode_fps(&m->mode));
+     if (fps <= 0)
+         fps = 60;
+-    double span = MP_TIME_NS_TO_S(m->out.fill_ahead_ns + MARGIN_NS +
+-                                  atomic_load(&m->delay_ns));
++    double span = MP_TIME_NS_TO_S(m->out.fill_ahead_ns + m->out.fill_late_ns +
++                                  MARGIN_NS + atomic_load(&m->delay_ns));
+     return MPCLAMP((int)ceil((span + 0.1) * fps) + 4, RING_MIN, RING_MAX);
+ }
+ 
 @@ -262,7 +264,9 @@ static void update_latency(struct dl_mirror *m)
      atomic_store(&m->latency_base_ns, latency);
  }
@@ -285,6 +344,21 @@ index 1f8c6cb..f549757 100644
          return false;
      }
      m->started = true;
+@@ -366,10 +378,10 @@ static bool convert(struct dl_mirror *m, struct mp_image *dst,
+ // Call with lock held. Returns -1 if all entries are still needed.
+ static int get_free_entry(struct dl_mirror *m)
+ {
+-    // Every future slot may use frames due before this; of these only the
+-    // newest is still needed.
+-    int64_t limit = mp_time_ns() - m->out.fill_ahead_ns - MARGIN_NS -
+-                    atomic_load(&m->delay_ns);
++    // Every future slot, including slots filled late, may use frames due
++    // before this; of these only the newest is still needed.
++    int64_t limit = mp_time_ns() - m->out.fill_ahead_ns - m->out.fill_late_ns -
++                    MARGIN_NS - atomic_load(&m->delay_ns);
+     int newest = -1;
+     for (int n = 0; n < m->num_ring; n++) {
+         struct ring_entry *e = &m->ring[n];
 @@ -394,11 +406,26 @@ static int get_free_entry(struct dl_mirror *m)
  // Returns -1 if the ring is full; the frame is then dropped.
  static int acquire_entry(struct dl_mirror *m)
@@ -407,28 +481,37 @@ index 1f8c6cb..f549757 100644
      if (m->opened)
          m->backend->close(&m->out);
  
-@@ -597,13 +642,19 @@ double dl_mirror_fill(struct dl_mirror *m, void *dst, ptrdiff_t stride,
+@@ -595,8 +640,8 @@ double dl_mirror_fill(struct dl_mirror *m, void *dst, ptrdiff_t stride,
+ {
+     mp_mutex_lock(&m->lock);
  
-     int64_t limit = display_time - m->out.fill_ahead_ns - MARGIN_NS -
-                     atomic_load(&m->delay_ns);
--    int best = -1;
-+    int best = -1, oldest = -1;
+-    int64_t limit = display_time - m->out.fill_ahead_ns - MARGIN_NS -
+-                    atomic_load(&m->delay_ns);
++    int64_t delay = atomic_load(&m->delay_ns);
++    int64_t limit = display_time - m->out.fill_ahead_ns - MARGIN_NS - delay;
+     int best = -1;
      for (int n = 0; n < m->num_ring; n++) {
          struct ring_entry *e = &m->ring[n];
-         if (e->valid && e->target <= limit &&
+@@ -604,6 +649,18 @@ double dl_mirror_fill(struct dl_mirror *m, void *dst, ptrdiff_t stride,
              (best < 0 || e->target > m->ring[best].target))
              best = n;
-+        if (e->valid && (oldest < 0 || e->target < m->ring[oldest].target))
-+            oldest = n;
      }
 +    // A slot filled late (its display time already passed) may need frames
-+    // that were dropped meanwhile; repeat the oldest one rather than black.
-+    if (best < 0 && display_time < mp_time_ns())
-+        best = oldest;
++    // that were dropped meanwhile (see get_free_entry()). Take the oldest one
++    // that is due by now rather than black.
++    if (best < 0 && display_time < mp_time_ns()) {
++        int64_t now_limit = mp_time_ns() - m->out.fill_ahead_ns - MARGIN_NS - delay;
++        for (int n = 0; n < m->num_ring; n++) {
++            struct ring_entry *e = &m->ring[n];
++            if (e->valid && e->target <= now_limit &&
++                (best < 0 || e->target < m->ring[best].target))
++                best = n;
++        }
++    }
  
      double pts = MP_NOPTS_VALUE;
      struct mp_image *src = NULL;
-@@ -642,7 +693,7 @@ double dl_mirror_fill(struct dl_mirror *m, void *dst, ptrdiff_t stride,
+@@ -642,7 +699,7 @@ double dl_mirror_fill(struct dl_mirror *m, void *dst, ptrdiff_t stride,
  }
  
  void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
@@ -437,7 +520,7 @@ index 1f8c6cb..f549757 100644
  {
      if (!img || img->params.force_window)
          return;
-@@ -653,6 +704,9 @@ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+@@ -653,6 +710,9 @@ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
          target = mp_time_ns();
  
      mp_mutex_lock(&m->lock);
@@ -447,7 +530,7 @@ index 1f8c6cb..f549757 100644
      if (m->num_pending == MAX_PENDING) {
          talloc_free(m->pending[0].img);
          m->num_pending--;
-@@ -662,7 +716,7 @@ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
+@@ -662,7 +722,7 @@ void dl_mirror_queue(struct dl_mirror *m, struct mp_image *img,
      m->pending[m->num_pending++] = (struct pending){
          .img = ref,
          .target = target,
@@ -456,7 +539,7 @@ index 1f8c6cb..f549757 100644
      };
      mp_cond_signal(&m->wakeup);
      mp_mutex_unlock(&m->lock);
-@@ -674,6 +728,11 @@ double dl_mirror_get_latency(struct dl_mirror *m)
+@@ -674,6 +734,11 @@ double dl_mirror_get_latency(struct dl_mirror *m)
      return base ? MP_TIME_NS_TO_S(base + atomic_load(&m->delay_ns)) : 0;
  }
  
