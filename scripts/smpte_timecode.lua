@@ -5,8 +5,8 @@
 -- The start timecode is taken from (in order of priority):
 --   1. the "set-start" script message
 --   2. the start_tc option
---   3. the container metadata exposed by mpv (e.g. MXF)
---   4. ffprobe stream/format tags (e.g. the tmcd track in MOV/MP4)
+--   3. the container or track metadata exposed by mpv (MXF, MOV/MP4 tmcd)
+--   4. ffprobe stream/format tags (other formats)
 --   5. 00:00:00:00
 --
 -- The current timecode is also published as the property
@@ -22,10 +22,14 @@ local mp = require 'mp'
 local options = require 'mp.options'
 local utils = require 'mp.utils'
 
--- Another copy of this script is already loaded (e.g. from another config
--- folder); that one is in charge.
+-- Only the copy named smpte_timecode runs: a second smpte_timecode.lua (e.g.
+-- from another config folder) is named smpte_timecode2 by mpv, and renamed
+-- copies would not get the smpte_timecode/toggle binding or script messages.
 if mp.get_script_name() ~= "smpte_timecode" then
-    mp.msg.verbose("Another smpte_timecode.lua is loaded, not doing anything.")
+    mp.msg.warn("This copy of smpte_timecode.lua (" ..
+                tostring(debug.getinfo(1, "S").source):gsub("^@", "") ..
+                ") is not used; only a file named smpte_timecode.lua is. " ..
+                "Delete the copy.")
     return
 end
 
@@ -65,10 +69,16 @@ local state = {
     gen = 0,           -- incremented per file, invalidates stale ffprobe results
     detected = nil,    -- start timecode found in the file
     source = nil,      -- where `detected` came from
+    probing = false,   -- waiting for ffprobe; no timecode is shown meanwhile
+    warned = nil,      -- start timecode already warned about
     runtime_start = nil, -- set via the "set-start" script message
     tc = nil,          -- current timecode string
     info = nil,        -- current info line
     rendered = nil,    -- last overlay data
+    visible = false,   -- the overlay is on screen
+    force = false,     -- redraw even if the data did not change
+    enabled = true,    -- overlay on/off (opts.enabled, the saved state, toggles)
+    cmdline_enabled = nil, -- last smpte_timecode-enabled value in script-opts
 }
 
 -- Timecode math ------------------------------------------------------------
@@ -80,7 +90,7 @@ local function parse_tc(str)
     end
     local h, m, s, sep, f =
         str:match("^%s*(%d+)[:;.,](%d%d)[:;.,](%d%d)([:;.,])(%d+)%s*$")
-    if not h then
+    if not h or tonumber(m) >= 60 or tonumber(s) >= 60 then
         return nil
     end
     return {
@@ -200,13 +210,33 @@ local function probe_with_ffprobe(path)
         if gen ~= state.gen or state.detected then
             return
         end
+        state.probing = false
         if not success or not result or result.status ~= 0 then
-            mp.msg.verbose("ffprobe failed: " .. tostring(result and result.stderr or result))
-            return
+            local err = result and (result.error_string ~= "" and result.error_string
+                                    or result.stderr) or tostring(result)
+            if result and result.error_string == "init" then
+                -- Not installed: say so once, not for every file.
+                if not state.ffprobe_missing then
+                    mp.msg.warn("Could not run '" .. opts.ffprobe_path .. "' (set " ..
+                                "ffprobe_path); the start timecode of some formats is unknown.")
+                end
+                state.ffprobe_missing = true
+            else
+                mp.msg.warn("ffprobe failed, the start timecode is unknown: " .. tostring(err))
+            end
+        else
+            local tc = pick_ffprobe_tc(utils.parse_json(result.stdout or ""))
+            if tc then
+                state.detected, state.source = tc, "ffprobe"
+            end
         end
-        local tc = pick_ffprobe_tc(utils.parse_json(result.stdout or ""))
-        if tc then
-            state.detected, state.source = tc, "ffprobe"
+        update()
+    end)
+    -- Do not leave the timecode hidden if ffprobe hangs (e.g. on a slow share).
+    mp.add_timeout(5, function()
+        if gen == state.gen and state.probing then
+            state.probing = false
+            mp.msg.warn("ffprobe takes too long; the start timecode is unknown.")
             update()
         end
     end)
@@ -215,15 +245,28 @@ end
 local function detect_start()
     state.gen = state.gen + 1
     state.detected, state.source = nil, nil
+    state.probing = false
+    state.warned = nil
 
-    local tc = find_tc(mp.get_property_native("metadata"))
+    -- mpv exposes the container tags (MXF) and the stream tags (the tmcd
+    -- timecode of MOV/MP4 is on the video track).
+    local tc = find_tc(mp.get_property_native("metadata")) or
+               find_tc(mp.get_property_native("current-tracks/video/metadata"))
+    for _, track in ipairs(mp.get_property_native("track-list", {})) do
+        tc = tc or find_tc(track.metadata)
+    end
     if tc then
         state.detected, state.source = tc, "metadata"
         return
     end
 
+    -- With start_tc set, the detected value is not used.
     local path = mp.get_property("path")
+    if parse_tc(opts.start_tc) then
+        return
+    end
     if opts.use_ffprobe and path and (opts.ffprobe_network or not is_network(path)) then
+        state.probing = true
         probe_with_ffprobe(path)
     end
 end
@@ -253,16 +296,20 @@ local function ass_color(rgb)
 end
 
 local function render()
-    if not opts.enabled or not state.tc then
-        if state.rendered then
+    local force = state.force
+    state.force = false
+    if not state.enabled or not state.tc then
+        if state.visible then
             overlay:remove()
-            state.rendered = nil
+            state.visible = false
         end
+        state.rendered = nil
         return
     end
 
     local w, h = mp.get_osd_size()
     if not w or w <= 0 or h <= 0 then
+        state.force = force
         return
     end
     local res_y = 720
@@ -280,11 +327,12 @@ local function render()
         align.an, x, y, opts.font, opts.font_size, opts.border_size,
         ass_color(opts.color), ass_color(opts.border_color), text)
 
-    if data ~= state.rendered or overlay.res_x ~= res_x then
+    if force or not state.visible or data ~= state.rendered or overlay.res_x ~= res_x then
         overlay.res_x, overlay.res_y = res_x, res_y
         overlay.data = data
         overlay:update()
         state.rendered = data
+        state.visible = true
     end
 end
 
@@ -312,8 +360,9 @@ update = function()
     local rate = fps and rate_info(fps)
     local tc
 
-    if t and rate then
-        local start, source = active_start()
+    local start, source = active_start()
+    -- While ffprobe runs, the start is unknown unless it is set explicitly.
+    if t and rate and (not state.probing or source == "message" or source == "option") then
         local df
         if not can_drop_frame(rate) or opts.drop_frame == "no" then
             df = false
@@ -322,8 +371,16 @@ update = function()
         else
             df = start ~= nil and start.df
         end
+        if start and start.f >= rate.nominal and state.warned ~= rate.nominal then
+            mp.msg.warn(string.format("Start timecode frame %d is out of range for %s fps.",
+                                      start.f, format_fps(rate.fps)))
+            state.warned = rate.nominal
+        end
         local start_frames = start and tc_to_frames(start, rate.nominal, df) or 0
-        local frame = math.floor(t * rate.fps + 0.5)
+        -- Frames shown in between (deinterlaced fields, a higher output rate)
+        -- keep the timecode of the frame they belong to; the tolerance absorbs
+        -- rounded timestamps.
+        local frame = math.floor(t * rate.fps + 0.25)
         tc = frames_to_tc(start_frames + frame, rate.nominal, df)
         state.info = string.format("%s %s | %s", format_fps(rate.fps), df and "DF" or "NDF", source)
     end
@@ -355,7 +412,7 @@ local function load_enabled()
     local saved = file:read("*l")
     file:close()
     if saved == "on" or saved == "off" then
-        opts.enabled = saved == "on"
+        state.enabled = saved == "on"
     end
 end
 
@@ -369,21 +426,50 @@ local function save_enabled()
         mp.msg.warn("Could not save the overlay state to " .. path)
         return
     end
-    file:write(opts.enabled and "on" or "off", "\n")
+    file:write(state.enabled and "on" or "off", "\n")
     file:close()
 end
 
 local function publish_enabled()
-    mp.set_property_native("user-data/smpte_timecode-overlay", opts.enabled)
+    mp.set_property_native("user-data/smpte_timecode-overlay", state.enabled)
 end
 
-options.read_options(opts, "smpte_timecode", function()
-    state.rendered = nil
-    publish_enabled()
+local bind_toggle
+
+options.read_options(opts, "smpte_timecode", function(changed)
+    if changed.key_toggle then
+        bind_toggle()
+    end
+    if (changed.start_tc or changed.use_ffprobe or changed.ffprobe_path or
+        changed.ffprobe_network) and mp.get_property("path")
+    then
+        detect_start()
+    end
+    state.force = true
     update()
 end)
-load_enabled()
+state.enabled = opts.enabled
+-- An explicit --script-opts=smpte_timecode-enabled=... wins over the saved state.
+local cmdline_opts = mp.get_property_native("options/script-opts", {})
+if cmdline_opts["smpte_timecode-enabled"] == nil then
+    load_enabled()
+end
 publish_enabled()
+
+-- smpte_timecode-enabled set in script-opts (command line or at runtime) sets
+-- the overlay state, also when it equals the value in the config file.
+mp.observe_property("options/script-opts", "native", function(_, value)
+    local str = type(value) == "table" and value["smpte_timecode-enabled"] or nil
+    if str == state.cmdline_enabled then
+        return
+    end
+    state.cmdline_enabled = str
+    if str == "yes" or str == "no" then
+        state.enabled = str == "yes"
+        publish_enabled()
+        render()
+    end
+end)
 
 mp.register_event("file-loaded", function()
     state.runtime_start = nil
@@ -401,19 +487,27 @@ end)
 mp.observe_property("time-pos", "number", update)
 mp.observe_property("container-fps", "number", update)
 mp.observe_property("osd-dimensions", "native", function()
-    state.rendered = nil
+    state.force = true
     render()
 end)
 
-mp.add_key_binding(opts.key_toggle ~= "" and opts.key_toggle or nil, "toggle", function()
-    opts.enabled = not opts.enabled
+local function toggle()
+    state.enabled = not state.enabled
     publish_enabled()
     save_enabled()
     render()
-    mp.osd_message("SMPTE timecode: " .. (opts.enabled and "on" or "off"))
-end)
+    mp.osd_message("SMPTE timecode: " .. (state.enabled and "on" or "off"))
+end
+
+bind_toggle = function()
+    mp.remove_key_binding("toggle")
+    mp.add_key_binding(opts.key_toggle ~= "" and opts.key_toggle or nil, "toggle", toggle)
+end
+bind_toggle()
 
 -- script-message-to smpte_timecode set-start 01:00:00:00
+-- Drop-frame: quote it, as ';' separates mpv commands:
+-- script-message-to smpte_timecode set-start "01:00:00;00" (or 01:00:00.00)
 -- Without an argument, reverts to the detected start timecode.
 mp.register_script_message("set-start", function(str)
     local tc = parse_tc(str)

@@ -10,13 +10,13 @@ mirrors the video to **Blackmagic DeckLink / UltraStudio** cards.
 **Download** ([release notes](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC)):
 
 - Windows: [mpv-tc-win64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip)
-- macOS, Apple Silicon: [mpv-tc-macos-arm64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-arm64.zip)
+- macOS 15 or newer, Apple Silicon: [mpv-tc-macos-arm64.zip](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-macos-arm64.zip)
 
 ### Features
 
 - **Timecode overlay** (`scripts/smpte_timecode.lua`, works with any mpv): `HH:MM:SS:FF`,
   drop-frame `HH:MM:SS;FF` for 29.97/59.94. The start timecode is read from the file
-  (MXF metadata, the `tmcd` track of MOV/MP4 via ffprobe) or set manually.
+  (MXF metadata, the `tmcd` track of MOV/MP4; other formats via ffprobe) or set manually.
 - **Timecode in the on-screen controller**: replaces the current time next to the seek bar;
   click it to cycle timecode → time → time with ms. Built into the Windows/macOS builds; for
   another mpv 0.40–0.41 use `osc/osc.lua` with `osc=no`.
@@ -35,20 +35,28 @@ mirrors the video to **Blackmagic DeckLink / UltraStudio** cards.
 
 Unzip the archive anywhere and run `mpv.exe` from there. Nothing needs to be copied: the
 timecode in the OSC is built in, and mpv reads the `scripts`, `script-opts` and `luts`
-folders next to `mpv.exe` in addition to `%APPDATA%\mpv\`. Your own settings in
-`%APPDATA%\mpv\` take precedence. MOV/MP4 timecode needs `ffprobe` in `PATH` (or set
-`ffprobe_path`).
+folders next to `mpv.exe` in addition to `%APPDATA%\mpv\`. Your own `mpv.conf`, script
+options (`script-opts\*.conf`) and LUTs in `%APPDATA%\mpv\` are used as usual. With a
+`portable_config` folder, `--config-dir` or `MPV_HOME`, mpv ignores the folders next to
+`mpv.exe`; copy `scripts` and `luts` there in that case. The MOV/MP4 and MXF timecode is read
+by mpv itself; other formats need `ffprobe` in `PATH` (or set `ffprobe_path`).
 
 ### Install (macOS build)
 
 Unzip the archive and move `mpv.app` to `Applications`. The app is not notarized, so before
 the first start run in Terminal: `xattr -dr com.apple.quarantine /Applications/mpv.app`.
-Scripts and LUTs are inside the app (`mpv.app/Contents/Resources`); your own settings go to
-`~/.config/mpv/`. For MOV/MP4 timecode install `ffprobe` (`brew install ffmpeg`).
+Requires macOS 15 or newer on Apple Silicon. Scripts and LUTs are inside the app
+(`mpv.app/Contents/Resources`); your own settings go to `~/.config/mpv/`. For the timecode of
+formats other than MOV/MP4 and MXF, install `ffprobe` (`brew install ffmpeg`).
 
 **Updating from an earlier release:** delete the copies made by hand — `smpte_timecode.lua`,
 `luts.lua` and `osc.lua` in the `scripts` folder of your mpv settings, and the `osc=no` line in
-`mpv.conf` (if you added it for this). Otherwise the old copies are used instead of the new ones.
+`mpv.conf` (if you added it for this). The included scripts are loaded first and newer copies
+step aside, but old copies would run in addition to them. Also delete the `Sony`, `ARRI` and
+`Blackmagic` folders you copied into the `luts` folder of your settings: copies there are used
+instead of the included LUTs, and the S-Log2 LUT has changed (mpv logs a warning for such a
+copy). Keep the script file names: renamed copies (e.g. `smpte_timecode (1).lua`) are not
+used.
 
 The script alone works with any mpv on any OS: copy it to `~/.config/mpv/scripts/`.
 
@@ -64,23 +72,25 @@ Requires **Blackmagic Desktop Video 12.0 or newer**.
 
 | Option | Description |
 |---|---|
-| `--decklink-mirror=<device>` | `auto`, an index, or (part of) the card name; empty disables. Overrides the menu choice |
+| `--decklink-mirror=<device>` | `auto`, a 0-based index, or (part of) the card name; empty disables. Overrides the menu choice |
 | `--decklink-mode=<mode>` | `auto`, or e.g. `1080p25`, `1080i50`, `2160p25`, or a DeckLink code like `Hp25` (list with `mpv.com -v`) |
 | `--decklink-delay=<s>` | Extra output delay if frames repeat or skip on the card |
 | `--decklink-audio-sync=yes` | Delay the audio by the output latency (`decklink-latency` property) |
 
-Notes: the card shows each frame about 3 card frames after the window; only video goes to
+Notes: the card shows each frame about 3.5 card frames plus `--decklink-delay` after the window
+(the `decklink-latency` property); HDR video is not tone mapped; only video goes to
 the card (8-bit 4:2:2), audio stays on the computer; with `--hwdec`, frames are copied back
 from the GPU (use `--hwdec=auto-copy` if needed). On macOS, run
-`MPVBUNDLE=true /Applications/mpv.app/Contents/MacOS/mpv -v` from Terminal to see the modes
-and log (`MPVBUNDLE=true` makes it load the scripts inside the app).
+`MPVBUNDLE=true /Applications/mpv.app/Contents/MacOS/mpv --player-operation-mode=cplayer -v file`
+from Terminal to see the modes and the log (`MPVBUNDLE=true` loads the scripts inside the app;
+without `cplayer` the app writes the log only to `~/Library/Logs/mpv.log`).
 
 ### Timecode controls
 
 | Action | How |
 |---|---|
 | Toggle the overlay | `Ctrl+T` (`script-binding smpte_timecode/toggle`) or menu → **Timecode overlay** (patched mpv); remembered across restarts (`remember=no` disables) |
-| Set the start timecode | `script-message-to smpte_timecode set-start 01:00:00:00` |
+| Set the start timecode | `script-message-to smpte_timecode set-start 01:00:00:00`; drop-frame in quotes, as `;` separates commands: `set-start "01:00:00;00"` |
 | Use it elsewhere | property `user-data/smpte_timecode`, e.g. `--term-status-msg='TC ${user-data/smpte_timecode}'` |
 
 Font, size, position, colors and the other options are listed with comments in
@@ -99,8 +109,12 @@ LUTs are read from the `luts` folders of all mpv config folders: the included on
 `mpv.exe` / inside `mpv.app`, and your own in `%APPDATA%\mpv\luts\` or
 `~/.config/mpv/luts/`; every subfolder is a submenu. Supported: `.cube` (3D and 1D), `.3dl`,
 `.dat`, `.m3d`, `.csp`. LUT input is the camera RGB with video levels mapped to 0–1, as in
-DaVinci Resolve, so manufacturers' LUTs made for Resolve work as is; the output is treated as
-Rec.709 / BT.1886.
+DaVinci Resolve, so manufacturers' LUTs made for Resolve work as is (including
+`LUT_3D_INPUT_RANGE 0 1`); the output is treated as Rec.709 / BT.1886. A LUT file that cannot be
+read (e.g. a `.cube` with a wrong number of entries) or a `.cube` with an input range other than
+0–1 is refused with a message instead of being applied; a remembered LUT that fails to load is
+turned off. Your own `--lut` (e.g. a
+display calibration) is replaced while a LUT from the menu is on and restored with **Off**.
 
 Included (`luts/`), all to Rec.709 BT.1886:
 
@@ -112,17 +126,18 @@ Included (`luts/`), all to Rec.709 BT.1886:
 
 These are technical conversions generated by `tools/make_luts.py` from the published log
 curves and gamuts (colour-science) with a neutral filmic tone curve (18% grey → 40%,
-highlights roll off about 6.5 stops above grey). They are not the manufacturers' LUTs; for
+highlights roll off about 6.5 stops above grey, or at the end of the curve for S-Log2). They
+are not the manufacturers' LUTs; for
 the official looks, download the Sony / ARRI / Blackmagic LUTs and put them in a folder next
 to these.
 
 ### Building
 
-`mpv-patches/` holds the patches against mpv `v0.41.0`. The **Windows build** GitHub Actions
-workflow applies them, builds with MSYS2 and uploads `mpv.exe` with its DLLs; a manual run
-with `release_tag` publishes the build and `RELEASE_NOTES.md` to that release. The
-**macOS build** workflow builds `mpv.app` with Homebrew libraries (Apple Silicon only); a
-manual run with `release_tag` attaches the zip to that release.
+`mpv-patches/` holds the patches against mpv `v0.41.0`. The **Build** GitHub Actions workflow
+applies them and builds Windows (MSYS2) and macOS (Homebrew, Apple Silicon) packages, tests
+them and uploads them as artifacts; `versions.txt` in each package lists the library versions.
+A manual run on `main` with `release_tag` publishes both packages and `RELEASE_NOTES.md` to
+that release and moves its tag to the built commit.
 
 ### License
 
@@ -147,8 +162,8 @@ mpv 0.41.0 для Windows и macOS с выводом на карты Blackmagic 
 - Стартовый таймкод берёт из файла:
   1. сообщение `set-start` (задаётся во время просмотра);
   2. опция `start_tc`;
-  3. метаданные контейнера, которые отдаёт mpv (MXF);
-  4. `ffprobe` — теги потоков/контейнера (трек `tmcd` в MOV/MP4);
+  3. метаданные контейнера и дорожек, которые отдаёт mpv (MXF, трек `tmcd` в MOV/MP4);
+  4. `ffprobe` — теги потоков/контейнера (остальные форматы);
   5. иначе `00:00:00:00`.
 - Публикует текущий таймкод в свойство `user-data/smpte_timecode`.
 
@@ -157,11 +172,17 @@ mpv 0.41.0 для Windows и macOS с выводом на карты Blackmagic 
 **Сборки mpv_tc (Windows, macOS)** — ничего копировать не нужно. Таймкод в панели встроен,
 скрипты и LUT-ы лежат рядом с `mpv.exe` (папки `scripts`, `script-opts`, `luts`) или внутри
 `mpv.app` (`Contents/Resources`), и mpv находит их сам. Свои настройки — как обычно в
-`%APPDATA%\mpv\` или `~/.config/mpv/`, они важнее встроенных.
+`%APPDATA%\mpv\` или `~/.config/mpv/` (свой `mpv.conf`, `script-opts\*.conf`, свои LUT-ы).
+С папкой `portable_config`, `--config-dir` или `MPV_HOME` mpv не читает папки рядом с
+`mpv.exe` — тогда скопируйте `scripts` и `luts` туда. macOS-сборка требует macOS 15+.
 
 Если обновляетесь с прошлого релиза, удалите скопированные вручную `smpte_timecode.lua`,
-`luts.lua`, `osc.lua` из папки `scripts` настроек mpv и строку `osc=no` из `mpv.conf` —
-иначе будут работать старые копии.
+`luts.lua`, `osc.lua` из папки `scripts` настроек mpv и строку `osc=no` из `mpv.conf`:
+встроенные скрипты загружаются первыми, а старые копии работали бы вместе с ними. Удалите и
+скопированные папки `Sony`, `ARRI`, `Blackmagic` из папки `luts` настроек: копии там
+используются вместо встроенных LUT-ов, а LUT S-Log2 изменился (mpv пишет предупреждение о такой
+копии). Не переименовывайте скрипты: переименованные копии (например,
+`smpte_timecode (1).lua`) не работают.
 
 **Обычный mpv** — скопировать скрипт в папку настроек:
 
@@ -172,14 +193,14 @@ cp script-opts/smpte_timecode.conf ~/.config/mpv/script-opts/   # необяза
 
 Windows: `%APPDATA%\mpv\scripts\` и `%APPDATA%\mpv\script-opts\`.
 
-Для MOV/MP4 нужен `ffprobe` в `PATH` (или путь в `ffprobe_path`).
+Таймкод MOV/MP4 и MXF mpv читает сам; для остальных форматов нужен `ffprobe` в `PATH` (или путь в `ffprobe_path`).
 
 ### Управление
 
 | Действие | Как |
 |---|---|
 | Вкл/выкл | `Ctrl+T` (опция `key_toggle`), в `input.conf`: `KEY script-binding smpte_timecode/toggle`, или меню mpv → **Timecode overlay** (в сборках этого репозитория). Состояние запоминается в `smpte_timecode.state` в папке настроек |
-| Задать старт | `script-message-to smpte_timecode set-start 01:00:00:00` |
+| Задать старт | `script-message-to smpte_timecode set-start 01:00:00:00`; drop-frame — в кавычках, `;` разделяет команды: `set-start "01:00:00;00"` |
 | Сбросить старт из `set-start` | `script-message-to smpte_timecode set-start` |
 
 Таймкод в своих строках OSD/терминала:
@@ -202,8 +223,8 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
    ```
    osc=no
    ```
-3. Чтобы таймкод не дублировался поверх видео, выключите его `Ctrl+T` или пунктом
-   **Timecode overlay** в меню mpv — выбор запоминается.
+3. Чтобы таймкод не дублировался поверх видео, выключите его `Ctrl+T` (в сборках mpv_tc
+   также пунктом **Timecode overlay** в меню) — выбор запоминается.
 
 Клик по таймкоду в OSC переключает: таймкод → время → время с миллисекундами → таймкод.
 Показ по умолчанию отключается в `script-opts/osc.conf`: `smpte_timecode=no`.
@@ -246,9 +267,10 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 картинка без OSD и субтитров. Windows и macOS (патч `0005`), нужен установленный Blackmagic
 Desktop Video.
 
-Сборка: GitHub Actions → **Windows build** → артефакт `mpv-decklink-win64`; ручной запуск с `release_tag` публикует сборку и `RELEASE_NOTES.md` в релиз и ставит его тег на собранный коммит
-(`mpv.exe` с DLL, рядом — папки `scripts`, `script-opts`, `luts`). **macOS build** собирает
-`mpv.app` для Apple Silicon и с `release_tag` добавляет архив в релиз.
+Сборка: GitHub Actions → **Build** собирает и проверяет пакеты для Windows (`mpv.exe` с DLL,
+рядом папки `scripts`, `script-opts`, `luts`) и macOS (`mpv.app` для Apple Silicon); ручной
+запуск на `main` с `release_tag` публикует оба пакета и `RELEASE_NOTES.md` в релиз и ставит его
+тег на собранный коммит.
 
 macOS: `mpv.app` не нотаризован — перед первым запуском
 `xattr -dr com.apple.quarantine /Applications/mpv.app`. Настройки — в `~/.config/mpv/`.
@@ -265,7 +287,7 @@ mpv --decklink-mirror=auto file.mov
 
 | Опция | Описание |
 |---|---|
-| `--decklink-mirror=<устройство>` | `auto` — первая карта с выходом, число — по номеру, иначе часть имени. Пусто — выключено |
+| `--decklink-mirror=<устройство>` | `auto` — первая карта с выходом, число — номер с нуля (0 — первая карта), иначе часть имени. Пусто — выключено |
 | `--decklink-mode=<режим>` | `auto` (по частоте кадров и размеру видео) или `1080p25`, `1080i50`, `2160p25`, код `Hp25`. Список — `mpv -v` |
 | `--decklink-delay=<сек>` | Дополнительная задержка вывода, если на карте повторяются/пропадают кадры |
 | `--decklink-audio-sync=yes` | Задержать звук на задержку карты (свойство `decklink-latency`); `--audio-delay` добавляется сверху — поправка на монитор |
@@ -278,7 +300,9 @@ decklink-mirror=auto
 
 Особенности:
 - Видео, не совпадающее с размером режима, вписывается с чёрными полями.
-- Карта показывает кадр примерно на 3 кадра позже окна (собственный тактовый генератор карты).
+- Карта показывает кадр примерно на 3,5 кадра плюс `--decklink-delay` позже окна (свойство
+  `decklink-latency`; собственный тактовый генератор карты).
+- HDR-видео выводится на карту без тональной компрессии (света обрезаются).
 - Звук идёт через звуковую карту ПК, на DeckLink выводится только видео (8 бит 4:2:2).
   С синхронизацией звука он совпадает с картинкой на карте, окно при этом чуть опережает звук.
 - При `--hwdec` кадры копируются из видеопамяти; при проблемах — `--hwdec=auto-copy`.
@@ -293,8 +317,11 @@ decklink-mirror=auto
 LUT-ы берутся из папок `luts` всех папок настроек mpv: встроенные — рядом с `mpv.exe` / внутри
 `mpv.app`, свои — в `%APPDATA%\mpv\luts\` или `~/.config/mpv/luts/`; каждая подпапка — подменю. Форматы: `.cube` (3D и 1D), `.3dl`, `.dat`,
 `.m3d`, `.csp`. На вход LUT подаётся RGB камеры с видеоуровнями, растянутыми в 0–1, как в
-DaVinci Resolve, — LUT-ы производителей для Resolve подходят без изменений. Выход считается
-Rec.709 / BT.1886.
+DaVinci Resolve, — LUT-ы производителей для Resolve подходят без изменений (в том числе с
+`LUT_3D_INPUT_RANGE 0 1`). Выход считается Rec.709 / BT.1886. Нечитаемый LUT (например, `.cube`
+с неверным числом значений) и `.cube` с входным диапазоном не 0–1 не применяются, появляется
+сообщение; запомненный LUT, который не загрузился, выключается. Свой `--lut` (например, калибровка монитора) заменяется, пока включён LUT
+из меню, и возвращается при **Off**.
 
 В комплекте (`luts/`), все в Rec.709 BT.1886: Sony — S-Log3 S-Gamut3.Cine, S-Log3 S-Gamut3,
 S-Log3 Venice S-Gamut3.Cine / S-Gamut3, S-Log2 S-Gamut; ARRI — LogC3 AWG3 (EI 800),
@@ -302,7 +329,8 @@ LogC4 AWG4; Blackmagic — Film Gen 5, DaVinci Intermediate / DWG.
 
 Это технические преобразования, сгенерированные `tools/make_luts.py` по опубликованным
 формулам кривых и гамутов (colour-science), с нейтральной плёночной кривой (18% серого → 40%,
-мягкий завал светов примерно на 6,5 стопов выше серого). Это не LUT-ы производителей:
+мягкий завал светов примерно на 6,5 стопов выше серого, у S-Log2 — к концу кривой). Это не
+LUT-ы производителей:
 официальные LUT-ы Sony / ARRI / Blackmagic можно скачать и положить в отдельную папку рядом.
 
 ### Лицензия

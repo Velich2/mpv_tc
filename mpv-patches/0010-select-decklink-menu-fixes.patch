@@ -1,0 +1,136 @@
+From b8b5d8f61b58d1e76b8caa2370ecd4e56304f98d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 14 Oct 2026 16:23:28 +0000
+Subject: [PATCH 2/2] select.lua: DeckLink menu fixes
+
+- Save only the choices made in the menu, not options from the command
+  line or a config file.
+- Warn instead of failing on builds without DeckLink support.
+- Preselect the entry matching an index or part of a name; show whether
+  the output is actually running.
+---
+ player/lua/select.lua | 65 +++++++++++++++++++++++++++++++------------
+ 1 file changed, 47 insertions(+), 18 deletions(-)
+
+diff --git a/player/lua/select.lua b/player/lua/select.lua
+index 4551b1f..2eab65b 100644
+--- a/player/lua/select.lua
++++ b/player/lua/select.lua
+@@ -424,18 +424,23 @@ local function set_explicitly(option)
+            mp.get_property_bool("option-info/" .. option .. "/set-from-config")
+ end
+ 
++-- The DeckLink settings last chosen in the menu. Only these are saved, never
++-- values that came from the command line or a config file.
++local saved_device = ""
++local saved_audio_sync = false
++
+ -- Restore the DeckLink settings chosen in the menu, unless the options were
+ -- given on the command line or in a config file.
+ if decklink_supported() and mp.get_property_bool("config") then
+     local file = io.open(mp.command_native({"expand-path", decklink_state}))
+     if file then
+-        local device = file:read("*l")
+-        local audio_sync = file:read("*l")
++        saved_device = file:read("*l") or ""
++        saved_audio_sync = file:read("*l") == "audio-sync"
+         file:close()
+-        if device and device ~= "" and not set_explicitly("decklink-mirror") then
+-            mp.set_property("decklink-mirror", device)
++        if saved_device ~= "" and not set_explicitly("decklink-mirror") then
++            mp.set_property("decklink-mirror", saved_device)
+         end
+-        if audio_sync == "audio-sync" and not set_explicitly("decklink-audio-sync") then
++        if saved_audio_sync and not set_explicitly("decklink-audio-sync") then
+             mp.set_property_bool("decklink-audio-sync", true)
+         end
+     end
+@@ -451,15 +456,40 @@ local function save_decklink()
+         show_error(error_message)
+         return
+     end
+-    file:write(mp.get_property("decklink-mirror"), "\n")
+-    if mp.get_property_bool("decklink-audio-sync") then
++    file:write(saved_device, "\n")
++    if saved_audio_sync then
+         file:write("audio-sync\n")
+     end
+     file:close()
+ end
+ 
++-- Menu entry matching a --decklink-mirror value: "auto", a 0-based index, the
++-- name, or part of it, as the option accepts.
++local function find_decklink_item(devices, current)
++    local index = tonumber(current)
++    if index and math.floor(index) == index and devices[index + 3] then
++        return index + 3
++    end
++    for i, device in ipairs(devices) do
++        if device == current then
++            return i
++        end
++    end
++    for i = 3, #devices do
++        if devices[i]:lower():find(current:lower(), 1, true) then
++            return i
++        end
++    end
++    return current == "" and 1 or 2
++end
++
+ mp.add_key_binding(nil, "select-decklink", function ()
+-    local current = mp.get_property("decklink-mirror")
++    if not decklink_supported() then
++        show_warning("DeckLink output is not supported by this build.")
++        return
++    end
++
++    local current = mp.get_property("decklink-mirror", "")
+     local audio_sync = mp.get_property_bool("decklink-audio-sync")
+     local items = {"Off", "Auto (first device)"}
+     local devices = {"", "auto"}
+@@ -474,12 +504,7 @@ mp.add_key_binding(nil, "select-decklink", function ()
+         return
+     end
+ 
+-    local default_item = 1
+-    for i, device in ipairs(devices) do
+-        if device == current then
+-            default_item = i
+-        end
+-    end
++    local default_item = find_decklink_item(devices, current)
+ 
+     -- Delays the audio by the output latency, so that it matches the
+     -- DeckLink output instead of the window.
+@@ -491,11 +516,13 @@ mp.add_key_binding(nil, "select-decklink", function ()
+         default_item = default_item,
+         submit = function (id)
+             if id > #devices then
+-                mp.set_property_bool("decklink-audio-sync", not audio_sync)
++                saved_audio_sync = not audio_sync
++                mp.set_property_bool("decklink-audio-sync", saved_audio_sync)
+                 mp.osd_message("Sync audio to DeckLink: " ..
+-                               (audio_sync and "off" or "on"))
++                               (saved_audio_sync and "on" or "off"))
+             else
+-                mp.set_property("decklink-mirror", devices[id])
++                saved_device = devices[id]
++                mp.set_property("decklink-mirror", saved_device)
+                 mp.osd_message("DeckLink output: " .. (id == 1 and "off" or items[id]))
+             end
+             save_decklink()
+@@ -812,7 +839,9 @@ mp.add_key_binding(nil, "menu", function ()
+         {is_disc and "Titles" or "Editions", "script-binding select/select-edition",
+          mp.get_property_native("edition-list/count", 0) > 1},
+         {"Audio devices", "script-binding select/select-audio-device", audio_track_count > 0},
+-        {"DeckLink output" .. (mp.get_property("decklink-mirror", "") ~= "" and " (on)" or ""),
++        {"DeckLink output" .. (mp.get_property("decklink-mirror", "") == "" and ""
++                               or mp.get_property("decklink-latency") and " (on)"
++                               or " (not running)"),
+          "script-binding select/select-decklink", decklink_supported()},
+         {"Timecode overlay: " .. (timecode_overlay and "on" or "off"),
+          "script-binding smpte_timecode/toggle", timecode_overlay ~= nil},
+-- 
+2.43.0
+
