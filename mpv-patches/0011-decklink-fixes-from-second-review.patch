@@ -1,4 +1,4 @@
-From 83e8cc668a0a50acd90fffd0561f967658c3a87f Mon Sep 17 00:00:00 2001
+From 5502229273d62ae4c0e77333b51295cc5548aecf Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 15 Oct 2026 02:07:14 +0000
 Subject: [PATCH] decklink: fixes from second review
@@ -23,9 +23,9 @@ Subject: [PATCH] decklink: fixes from second review
  video/out/decklink/backend_win.c   |   5 ++
  video/out/decklink/mirror.c        | 135 +++++++++++++++++++++--------
  video/out/decklink/mirror.h        |  11 ++-
- video/out/vo.c                     |  70 +++++++++++----
+ video/out/vo.c                     |  75 ++++++++++++----
  video/out/vo.h                     |   1 +
- 11 files changed, 211 insertions(+), 61 deletions(-)
+ 11 files changed, 215 insertions(+), 62 deletions(-)
 
 diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
 index 72d5b7e..8bd8256 100644
@@ -504,7 +504,7 @@ index b405b14..71a4175 100644
  void dl_mirror_set_delay(struct dl_mirror *m, double delay);
  
 diff --git a/video/out/vo.c b/video/out/vo.c
-index 2a51954..8b6edad 100644
+index 2a51954..980c576 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
 @@ -126,6 +126,7 @@ struct vo_internal {
@@ -535,7 +535,7 @@ index 2a51954..8b6edad 100644
      }
      mp_mutex_unlock(&in->lock);
  }
-@@ -943,27 +944,38 @@ bool vo_is_visible(struct vo *vo)
+@@ -943,31 +944,42 @@ bool vo_is_visible(struct vo *vo)
  }
  
  #if HAVE_DECKLINK
@@ -564,11 +564,7 @@ index 2a51954..8b6edad 100644
 +             ? frame->ideal_frame_duration * 1e9 : frame->duration;
 +        max_diff = MPMAX(step, in->vsync_interval);
 +    } else {
-+        if (frame->pts <= 0) {
-+            in->dl_last_target = 0;
-+            return 0;
-+        }
-+        ref = frame->pts;
++        ref = frame->pts > 0 ? frame->pts : mp_time_ns();
 +        step = frame->duration;
 +        max_diff = step * 0.75; // a dropped frame is not jitter
      }
@@ -582,10 +578,19 @@ index 2a51954..8b6edad 100644
          target = in->dl_last_target + llrint(step);
          int64_t diff = ref - target;
 -        if (llabs(diff) > MPMAX(step, in->vsync_interval)) {
+-            target = ref; // seek, frame drop, or timing reset
 +        if (llabs(diff) > max_diff) {
-             target = ref; // seek, frame drop, or timing reset
++            target = ref; // frame drop or timing reset
          } else {
              target += diff / 16;
+         }
++        // Until the next seek (vo_seek_reset()), frames are shown in order. A
++        // late player can schedule a frame before the previous one, which the
++        // mirror would take as a seek, dropping the frames queued before it.
++        target = MPMAX(target, in->dl_last_target + llrint(step / 2));
+     }
+     in->dl_last_target = target;
+     return target;
 @@ -988,7 +1000,8 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
  #if HAVE_DECKLINK
      if (in->dl_mirror) {
@@ -634,6 +639,16 @@ index 2a51954..8b6edad 100644
  #endif
      forget_frames(vo); // implicitly synchronized
      talloc_free(in->current_frame);
+@@ -1412,6 +1446,9 @@ void vo_seek_reset(struct vo *vo)
+     mp_mutex_lock(&in->lock);
+     forget_frames(vo);
+     reset_vsync_timings(vo);
++#if HAVE_DECKLINK
++    in->dl_last_target = 0;
++#endif
+     in->send_reset = true;
+     wakeup_locked(vo);
+     mp_mutex_unlock(&in->lock);
 diff --git a/video/out/vo.h b/video/out/vo.h
 index 62d658a..3b8feea 100644
 --- a/video/out/vo.h
