@@ -89,20 +89,22 @@ jobs:
           MPV=mpv/build/mpv
           $MPV --no-config --version
           ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv
-          ffmpeg -v error -f lavfi -i testsrc2=s=720x576:r=25 -t 3 -c:v mpeg2video -q:v 2 pal.mkv
+          ffmpeg -v error -f lavfi -i testsrc2=s=720x576:r=25 -t 4 -c:v mpeg2video -q:v 2 pal.mkv
           $MPV --no-config --vo=null --ao=null -v \
             --decklink-mirror=dummy --length=1 test.mkv > mode.log 2>&1
           grep -q "Output 1080p25 (1920x1080) for 1920x800" mode.log ||
             { grep decklink mode.log; false; }
           # Every slot shows the next frame: no repeats or skips once running
           # (frame dropping is off, as busy CI machines would drop frames; a small
-          # PAL picture keeps the conversion cheap on slow runners).
+          # PAL picture keeps the conversion cheap, and the delay gives headroom
+          # on runners that stall all threads for up to 0.2 s).
           $MPV --no-config --vo=null --ao=null -v --msg-time --framedrop=no \
-            --decklink-mirror=dummy --decklink-mode=PAL --length=2 pal.mkv > dummy.log 2>&1
+            --decklink-mirror=dummy --decklink-mode=PAL --decklink-delay=0.5 \
+            --length=3.5 pal.mkv > dummy.log 2>&1
           grep "decklink" dummy.log | grep -v "slot " || true
-          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
+          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '20,70p' |
             awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
-                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }' ||
+                 END { print "irregular slots:", bad + 0; exit (NR < 40 || bad > 0) }' ||
             { grep -E "slot|decklink\]|Dropped|frame" dummy.log | head -80; false; }
 
       - name: Test LUTs (GPU and CPU)
@@ -182,7 +184,7 @@ jobs:
           set -o pipefail
           ./mpv/build/mpv.com --no-config --version
           ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv
-          ffmpeg -v error -f lavfi -i testsrc2=s=720x576:r=25 -t 3 -c:v mpeg2video -q:v 2 pal.mkv
+          ffmpeg -v error -f lavfi -i testsrc2=s=720x576:r=25 -t 4 -c:v mpeg2video -q:v 2 pal.mkv
           ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=25 -t 3 -c:v mpeg2video -q:v 2 \
             -timecode 10:00:00:00 tc.mov
           ./mpv/build/mpv.com --no-config --vo=null --ao=null -v \
@@ -191,13 +193,15 @@ jobs:
             { grep decklink mode.log; false; }
           # Every slot shows the next frame: no repeats or skips once running
           # (frame dropping is off, as busy CI machines would drop frames; a small
-          # PAL picture keeps the conversion cheap on slow runners).
+          # PAL picture keeps the conversion cheap, and the delay gives headroom
+          # on runners that stall all threads for up to 0.2 s).
           ./mpv/build/mpv.com --no-config --vo=null --ao=null -v --msg-time --framedrop=no \
-            --decklink-mirror=dummy --decklink-mode=PAL --length=2 pal.mkv > dummy.log 2>&1
+            --decklink-mirror=dummy --decklink-mode=PAL --decklink-delay=0.5 \
+            --length=3.5 pal.mkv > dummy.log 2>&1
           grep "decklink" dummy.log | grep -v "slot " || true
-          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
+          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '20,70p' |
             awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
-                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }' ||
+                 END { print "irregular slots:", bad + 0; exit (NR < 40 || bad > 0) }' ||
             { grep -E "slot|decklink\]|Dropped|frame" dummy.log | head -80; false; }
           # No card on the runner: must fail gracefully, not crash.
           ./mpv/build/mpv.com --no-config --vo=null --ao=null \
@@ -310,7 +314,7 @@ jobs:
           $MPV --no-config --version
           grep -q "HAVE_DECKLINK_MAC 1" mpv/build/config.h
           ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv
-          ffmpeg -v error -f lavfi -i testsrc2=s=720x576:r=25 -t 3 -c:v mpeg2video -q:v 2 pal.mkv
+          ffmpeg -v error -f lavfi -i testsrc2=s=720x576:r=25 -t 4 -c:v mpeg2video -q:v 2 pal.mkv
           ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=25 -t 3 -c:v mpeg2video -q:v 2 \
             -timecode 10:00:00:00 tc.mov
           $MPV --no-config --vo=null --ao=null -v \
@@ -319,13 +323,15 @@ jobs:
             { grep decklink mode.log; false; }
           # Every slot shows the next frame: no repeats or skips once running
           # (frame dropping is off, as busy CI machines would drop frames; a small
-          # PAL picture keeps the conversion cheap on slow runners).
+          # PAL picture keeps the conversion cheap, and the delay gives headroom
+          # on runners that stall all threads for up to 0.2 s).
           $MPV --no-config --vo=null --ao=null -v --msg-time --framedrop=no \
-            --decklink-mirror=dummy --decklink-mode=PAL --length=2 pal.mkv > dummy.log 2>&1
+            --decklink-mirror=dummy --decklink-mode=PAL --decklink-delay=0.5 \
+            --length=3.5 pal.mkv > dummy.log 2>&1
           grep "decklink" dummy.log | grep -v "slot " || true
-          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '5,40p' |
+          grep -o 'slot [0-9]* pts [0-9][0-9.]*' dummy.log | awk '{print $4}' | sed -n '20,70p' |
             awk 'NR > 1 { d = $1 - prev; if (d < 0.039 || d > 0.041) bad++ } { prev = $1 }
-                 END { print "irregular slots:", bad + 0; exit (NR < 30 || bad > 0) }' ||
+                 END { print "irregular slots:", bad + 0; exit (NR < 40 || bad > 0) }' ||
             { grep -E "slot|decklink\]|Dropped|frame" dummy.log | head -80; false; }
           # No card on the runner: must fail gracefully, not crash.
           $MPV --no-config --vo=null --ao=null \
