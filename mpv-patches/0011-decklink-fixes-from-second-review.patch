@@ -1,4 +1,4 @@
-From 2b95566dcdd923b8ad401d7774dd7348fa132901 Mon Sep 17 00:00:00 2001
+From 83e8cc668a0a50acd90fffd0561f967658c3a87f Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 15 Oct 2026 02:07:14 +0000
 Subject: [PATCH] decklink: fixes from second review
@@ -23,9 +23,9 @@ Subject: [PATCH] decklink: fixes from second review
  video/out/decklink/backend_win.c   |   5 ++
  video/out/decklink/mirror.c        | 135 +++++++++++++++++++++--------
  video/out/decklink/mirror.h        |  11 ++-
- video/out/vo.c                     |  35 ++++++--
+ video/out/vo.c                     |  70 +++++++++++----
  video/out/vo.h                     |   1 +
- 11 files changed, 188 insertions(+), 49 deletions(-)
+ 11 files changed, 211 insertions(+), 61 deletions(-)
 
 diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
 index 72d5b7e..8bd8256 100644
@@ -504,7 +504,7 @@ index b405b14..71a4175 100644
  void dl_mirror_set_delay(struct dl_mirror *m, double delay);
  
 diff --git a/video/out/vo.c b/video/out/vo.c
-index 2a51954..042b669 100644
+index 2a51954..8b6edad 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
 @@ -126,6 +126,7 @@ struct vo_internal {
@@ -535,7 +535,58 @@ index 2a51954..042b669 100644
      }
      mp_mutex_unlock(&in->lock);
  }
-@@ -988,7 +989,8 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
+@@ -943,27 +944,38 @@ bool vo_is_visible(struct vo *vo)
+ }
+ 
+ #if HAVE_DECKLINK
+-// Realtime at which the VO will show the frame, for the DeckLink mirror. For
+-// display-synced frames this follows the ideal frame timing, locked to the
+-// vsync timing, instead of the moment the frame happens to be queued.
++// Realtime at which the VO will show the frame, for the DeckLink mirror. This
++// follows the frame timing smoothed over several frames, so that jitter of the
++// VO timing (e.g. a busy machine) does not make the output repeat one frame and
++// skip the next. For display-synced frames it is locked to the vsync timing
++// instead of the moment the frame happens to be queued.
+ // Call with lock held, before setting frame_queued.
+ static int64_t get_decklink_target(struct vo *vo, struct vo_frame *frame)
+ {
+     struct vo_internal *in = vo->in;
+-    if (!frame->display_synced) {
+-        in->dl_last_target = frame->pts;
+-        return frame->pts;
++    int64_t ref;
++    double step, max_diff;
++    if (frame->display_synced) {
++        ref = get_display_synced_frame_end(vo);
++        if (ref <= 0)
++            ref = mp_time_ns();
++        step = frame->ideal_frame_duration > 0
++             ? frame->ideal_frame_duration * 1e9 : frame->duration;
++        max_diff = MPMAX(step, in->vsync_interval);
++    } else {
++        if (frame->pts <= 0) {
++            in->dl_last_target = 0;
++            return 0;
++        }
++        ref = frame->pts;
++        step = frame->duration;
++        max_diff = step * 0.75; // a dropped frame is not jitter
+     }
+-    int64_t ref = get_display_synced_frame_end(vo);
+-    if (ref <= 0)
+-        ref = mp_time_ns();
+-    double step = frame->ideal_frame_duration > 0
+-                ? frame->ideal_frame_duration * 1e9 : frame->duration;
+     int64_t target = ref;
+     if (in->dl_last_target > 0 && step > 0) {
+         target = in->dl_last_target + llrint(step);
+         int64_t diff = ref - target;
+-        if (llabs(diff) > MPMAX(step, in->vsync_interval)) {
++        if (llabs(diff) > max_diff) {
+             target = ref; // seek, frame drop, or timing reset
+         } else {
+             target += diff / 16;
+@@ -988,7 +1000,8 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
  #if HAVE_DECKLINK
      if (in->dl_mirror) {
          dl_mirror_queue(in->dl_mirror, frame->current,
@@ -545,7 +596,7 @@ index 2a51954..042b669 100644
      }
  #endif
      in->frame_queued = frame;
-@@ -1005,8 +1007,27 @@ double vo_get_decklink_latency(struct vo *vo)
+@@ -1005,8 +1018,27 @@ double vo_get_decklink_latency(struct vo *vo)
  #if HAVE_DECKLINK
      struct vo_internal *in = vo->in;
      mp_mutex_lock(&in->lock);
@@ -574,7 +625,7 @@ index 2a51954..042b669 100644
      mp_mutex_unlock(&in->lock);
  #endif
      return r;
-@@ -1343,6 +1364,8 @@ static MP_THREAD_VOID vo_thread(void *ptr)
+@@ -1343,6 +1375,8 @@ static MP_THREAD_VOID vo_thread(void *ptr)
      // The mirror may hold references to images owned by the VO driver (direct
      // rendering), so it must be gone before the driver.
      destroy_decklink(vo);
