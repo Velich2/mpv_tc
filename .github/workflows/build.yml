@@ -25,6 +25,10 @@ on:
         description: 'Release to publish both builds and RELEASE_NOTES.md to (empty: only build); main only'
         required: false
         default: ''
+      debug:
+        description: 'Also build the Windows debug version (published as the MPV_TC_DEBUG pre-release on main)'
+        type: boolean
+        default: false
 
 # The build jobs run third-party build code and get a read-only token; only the
 # publish job can write.
@@ -114,6 +118,13 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 90
+    strategy:
+      matrix:
+        # debug: mpv.exe with debug info, plus gdb and helper scripts to find
+        # where it hangs on a user's machine.
+        variant: ${{ fromJSON(inputs.debug && '["release", "debug"]' || '["release"]') }}
+    env:
+      ZIP: mpv-tc-win64${{ matrix.variant == 'debug' && '-debug' || '' }}
     defaults:
       run:
         shell: msys2 {0}
@@ -169,8 +180,9 @@ jobs:
       - name: Build
         run: |
           cd mpv
-          meson setup build --buildtype=release -Dlibmpv=false -Dlua=luajit \
-            -Dd3d11=enabled -Dshaderc=enabled -Dspirv-cross=enabled \
+          meson setup build \
+            --buildtype=${{ matrix.variant == 'debug' && 'debugoptimized' || 'release' }} \
+            -Dlibmpv=false -Dlua=luajit -Dd3d11=enabled -Dshaderc=enabled -Dspirv-cross=enabled \
             -Djpeg=enabled -Dlcms2=enabled -Duchardet=enabled -Ddecklink=enabled
           meson compile -C build
 
@@ -217,6 +229,22 @@ jobs:
           cp -r scripts script-opts luts README.md LICENSE dist/
           pacman -Q > dist/versions.txt
 
+      - name: Package debugger
+        if: matrix.variant == 'debug'
+        run: |
+          pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb
+          mkdir -p dist/debug/bin dist/debug/lib dist/debug/share
+          cp /ucrt64/bin/gdb.exe dist/debug/bin/
+          ldd /ucrt64/bin/gdb.exe | awk '{print $3}' | grep -i '^/ucrt64/' | xargs -r -I{} cp {} dist/debug/bin/
+          # gdb's embedded Python needs its standard library.
+          py=$(basename /ucrt64/lib/python3.*)
+          cp -r "/ucrt64/lib/$py" dist/debug/lib/
+          rm -rf dist/debug/lib/$py/{test,idlelib,tkinter,turtledemo,ensurepip,site-packages,lib2to3}
+          find dist/debug/lib -name __pycache__ -prune -exec rm -rf {} +
+          cp -r /ucrt64/share/gdb dist/debug/share/ 2> /dev/null || true
+          cp ci/debug/mpv-debug.bat ci/debug/mpv-hang-report.bat ci/debug/README-DEBUG.txt dist/
+          du -sh dist dist/debug
+
       - name: Test package
         shell: pwsh
         timeout-minutes: 10
@@ -239,14 +267,36 @@ jobs:
           if (-not (Select-String -Path pkg.log -Pattern 'LUT="Sony / S-Log3 S-Gamut3.Cine to Rec709"')) { throw "no LUT" }
           if (-not (Select-String -Path pkg.log -Pattern 'PIXFMT=gbrp16')) { throw "LUT filter not active" }
 
+      - name: Test debugger
+        if: matrix.variant == 'debug'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          # The hang report must name mpv's own functions (debug info) for a
+          # running mpv, without MSYS2 in PATH.
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $p = Start-Process .\dist\mpv.exe -PassThru -ArgumentList `
+            '--no-config', '--vo=null', '--ao=null', '--pause', '--keep-open=always', 'test.mkv'
+          Start-Sleep 5
+          $env:MPV_TC_NOPROMPT = '1'
+          cmd /c dist\mpv-hang-report.bat
+          $out = Join-Path ([Environment]::GetFolderPath('Desktop')) 'mpv-hang.txt'
+          Stop-Process -Id $p.Id -Force
+          Get-Content $out | Select-Object -First 60
+          if (-not (Select-String -Path $out -Pattern "PID $($p.Id)")) { throw "mpv not found" }
+          if (-not (Select-String -Path $out -Pattern ' in (vo_thread|mp_dispatch_queue_process|run_playloop|mp_thread_)')) {
+            throw "no mpv functions in the stack trace"
+          }
+          if (Select-String -Path $out -Pattern 'Fatal Python error') { throw "gdb Python is broken" }
+
       - name: Zip
         shell: bash
-        run: (cd dist && 7z a -tzip ../mpv-tc-win64.zip . > /dev/null)
+        run: (cd dist && 7z a -tzip ../$ZIP.zip . > /dev/null)
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: mpv-tc-win64
-          path: mpv-tc-win64.zip
+          name: ${{ env.ZIP }}
+          path: ${{ env.ZIP }}.zip
 
   macos:
     runs-on: macos-15
@@ -438,5 +488,47 @@ jobs:
           gh release delete-asset "$TAG" mpv-tc-macos-x86_64.zip --yes 2> /dev/null || true
           # Both builds were made from this commit; move the tag only now that
           # the assets are up.
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$TAG"
+
+  # The debug version goes to its own pre-release, so the normal release stays
+  # as it is.
+  publish-debug:
+    needs: [windows]
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.debug &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: release-debug
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mpv-tc-win64-debug
+          path: artifacts
+
+      - name: Publish debug pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: MPV_TC_DEBUG
+        run: |
+          set -euo pipefail
+          git fetch -q origin main
+          if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
+            echo "::error::main has moved on since this run started; not publishing."
+            exit 1
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --prerelease --notes-file ci/debug/README-DEBUG.txt
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --prerelease \
+              --title "mpv_tc debug (Windows)" --notes-file ci/debug/README-DEBUG.txt
+          fi
+          gh release upload "$TAG" artifacts/mpv-tc-win64-debug.zip --clobber
           git tag -f "$TAG" "$GITHUB_SHA"
           git push -f origin "refs/tags/$TAG"
