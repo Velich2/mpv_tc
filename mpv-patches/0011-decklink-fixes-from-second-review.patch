@@ -1,18 +1,8 @@
-From 1ed4ed5de2f9f325fccc6725b9c599478fbfd5c1 Mon Sep 17 00:00:00 2001
-From: Claude <noreply@anthropic.com>
-Date: Thu, 15 Oct 2026 02:07:14 +0000
-Subject: [PATCH] decklink: fixes from second review
+From aa78592be83992c3ed03a8a50b992920cb8abb3d Mon Sep 17 00:00:00 2001
+From: mpv_tc <mpv_tc@localhost>
+Date: Sat, 21 Nov 2026 20:38:16 +0700
+Subject: [PATCH] decklink: fix startup and timing edge cases
 
-- vo: free DR images released by the mirror worker before the VO uninit
-- mirror: size the ring by the content rate with a fixed --decklink-mode
-- mirror: estimate the rate of files without fps from frame timestamps
-  (speed independent, tells 23.976 from 24)
-- mirror: shrink the ring when its limit goes down
-- mirror: repeat the oldest frame instead of black for late slots
-- backends: skip slots that are already due in late callbacks
-- audio: wait for the DeckLink latency before starting audio; keep the
-  previous latency while the output restarts
-- meson: depend on all DeckLink IDL files
 ---
  DOCS/man/options.rst               |   3 +-
  meson.build                        |  22 +++-
@@ -30,10 +20,10 @@ Subject: [PATCH] decklink: fixes from second review
  13 files changed, 236 insertions(+), 70 deletions(-)
 
 diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
-index 72d5b7e..8bd8256 100644
+index 61aa9a4..7a13ed9 100644
 --- a/DOCS/man/options.rst
 +++ b/DOCS/man/options.rst
-@@ -1212,7 +1212,8 @@ Video
+@@ -1269,7 +1269,8 @@ Video
      ``decklink-latency`` property), so that it matches the DeckLink output
      rather than the window (default: no). This adds to ``--audio-delay``, which
      can be used for additional correction, e.g. for the monitor's own latency.
@@ -44,10 +34,10 @@ index 72d5b7e..8bd8256 100644
  ``--vd=<...>``
      Specify a priority list of video decoders to be used, according to their
 diff --git a/meson.build b/meson.build
-index 5e0caf8..cdf4786 100644
+index 03d76fe..7d2449b 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -1018,12 +1018,32 @@ if features['decklink'] and features['win32-desktop']
+@@ -1062,12 +1062,32 @@ if features['decklink'] and features['win32-desktop']
      sources += custom_target('DeckLinkAPI.h',
          input: 'video/out/decklink/sdk/DeckLinkAPI.idl',
          output: 'DeckLinkAPI.h',
@@ -82,7 +72,7 @@ index 5e0caf8..cdf4786 100644
                    '-h', '-o', '@OUTPUT@', '@INPUT@'])
      sources += files('video/out/decklink/backend_win.c')
 diff --git a/player/audio.c b/player/audio.c
-index 243212c..575e0ba 100644
+index 08ea5a9..f779c5e 100644
 --- a/player/audio.c
 +++ b/player/audio.c
 @@ -271,6 +271,7 @@ void reset_audio_state(struct MPContext *mpctx)
@@ -93,7 +83,7 @@ index 243212c..575e0ba 100644
  }
  
  void uninit_audio_out(struct MPContext *mpctx)
-@@ -867,6 +868,21 @@ void audio_start_ao(struct MPContext *mpctx)
+@@ -889,6 +890,21 @@ void audio_start_ao(struct MPContext *mpctx)
      struct ao_chain *ao_c = mpctx->ao_chain;
      if (!ao_c || !ao_c->ao || mpctx->audio_status != STATUS_READY)
          return;
@@ -105,7 +95,7 @@ index 243212c..575e0ba 100644
 +    {
 +        double now = mp_time_sec();
 +        if (!mpctx->decklink_wait_until)
-+            mpctx->decklink_wait_until = now + 2;
++            mpctx->decklink_wait_until = now + 0.25;
 +        if (now < mpctx->decklink_wait_until) {
 +            mp_set_timeout(mpctx, 0.01);
 +            return;
@@ -115,7 +105,7 @@ index 243212c..575e0ba 100644
      double pts = MP_NOPTS_VALUE;
      if (!get_sync_pts(mpctx, &pts))
          return;
-@@ -887,6 +903,7 @@ void audio_start_ao(struct MPContext *mpctx)
+@@ -909,6 +925,7 @@ void audio_start_ao(struct MPContext *mpctx)
      }
  
      MP_VERBOSE(mpctx, "starting audio playback\n");
@@ -124,10 +114,10 @@ index 243212c..575e0ba 100644
      ao_start(ao_c->ao);
      mpctx->audio_status = STATUS_PLAYING;
 diff --git a/player/core.h b/player/core.h
-index 5e69a81..0ed7993 100644
+index 5e34c11..716e612 100644
 --- a/player/core.h
 +++ b/player/core.h
-@@ -363,6 +363,8 @@ typedef struct MPContext {
+@@ -374,6 +374,8 @@ typedef struct MPContext {
      double time_frame;
      // Last value of the decklink-latency property, to notify changes.
      double decklink_latency;
@@ -137,10 +127,10 @@ index 5e69a81..0ed7993 100644
      // timeline. Used for status line information only.
      double total_avsync_change;
 diff --git a/player/video.c b/player/video.c
-index 872c490..79ca5f9 100644
+index 7f43e09..4a97be3 100644
 --- a/player/video.c
 +++ b/player/video.c
-@@ -1252,6 +1252,7 @@ void write_video(struct MPContext *mpctx)
+@@ -1303,6 +1303,7 @@ void write_video(struct MPContext *mpctx)
      struct vo_frame *frame = vo_frame_ref(&dummy);
  
      double diff = mpctx->past_frames[0].approx_duration;
@@ -587,7 +577,7 @@ index b405b14..71a4175 100644
  void dl_mirror_set_delay(struct dl_mirror *m, double delay);
  
 diff --git a/video/out/vo.c b/video/out/vo.c
-index 2a51954..980c576 100644
+index 704e2e2..ece6cdc 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
 @@ -126,6 +126,7 @@ struct vo_internal {
@@ -598,7 +588,7 @@ index 2a51954..980c576 100644
      // Option values dl_mirror was created with (VO thread only).
      char *dl_device, *dl_mode;
      double dl_delay;
-@@ -282,15 +283,15 @@ static void update_decklink(struct vo *vo)
+@@ -283,15 +284,15 @@ static void update_decklink(struct vo *vo)
  
      destroy_decklink(vo);
  
@@ -618,7 +608,7 @@ index 2a51954..980c576 100644
      }
      mp_mutex_unlock(&in->lock);
  }
-@@ -943,31 +944,42 @@ bool vo_is_visible(struct vo *vo)
+@@ -948,31 +949,42 @@ bool vo_is_visible(struct vo *vo)
  }
  
  #if HAVE_DECKLINK
@@ -674,7 +664,7 @@ index 2a51954..980c576 100644
      }
      in->dl_last_target = target;
      return target;
-@@ -988,7 +1000,8 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
+@@ -993,7 +1005,8 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
  #if HAVE_DECKLINK
      if (in->dl_mirror) {
          dl_mirror_queue(in->dl_mirror, frame->current,
@@ -684,7 +674,7 @@ index 2a51954..980c576 100644
      }
  #endif
      in->frame_queued = frame;
-@@ -1005,8 +1018,27 @@ double vo_get_decklink_latency(struct vo *vo)
+@@ -1010,8 +1023,27 @@ double vo_get_decklink_latency(struct vo *vo)
  #if HAVE_DECKLINK
      struct vo_internal *in = vo->in;
      mp_mutex_lock(&in->lock);
@@ -713,7 +703,7 @@ index 2a51954..980c576 100644
      mp_mutex_unlock(&in->lock);
  #endif
      return r;
-@@ -1343,6 +1375,8 @@ static MP_THREAD_VOID vo_thread(void *ptr)
+@@ -1342,6 +1374,8 @@ static MP_THREAD_VOID vo_thread(void *ptr)
      // The mirror may hold references to images owned by the VO driver (direct
      // rendering), so it must be gone before the driver.
      destroy_decklink(vo);
@@ -722,7 +712,7 @@ index 2a51954..980c576 100644
  #endif
      forget_frames(vo); // implicitly synchronized
      talloc_free(in->current_frame);
-@@ -1412,6 +1446,9 @@ void vo_seek_reset(struct vo *vo)
+@@ -1411,6 +1445,9 @@ void vo_seek_reset(struct vo *vo)
      mp_mutex_lock(&in->lock);
      forget_frames(vo);
      reset_vsync_timings(vo);
@@ -733,7 +723,7 @@ index 2a51954..980c576 100644
      wakeup_locked(vo);
      mp_mutex_unlock(&in->lock);
 diff --git a/video/out/vo.h b/video/out/vo.h
-index 62d658a..3b8feea 100644
+index 4e35af5..31af69e 100644
 --- a/video/out/vo.h
 +++ b/video/out/vo.h
 @@ -533,6 +533,7 @@ bool vo_is_ready_for_frame(struct vo *vo, int64_t next_pts);
@@ -742,8 +732,8 @@ index 62d658a..3b8feea 100644
  double vo_get_decklink_latency(struct vo *vo);
 +bool vo_decklink_starting(struct vo *vo);
  void vo_wait_frame(struct vo *vo);
+ void vo_wait_on_vo(struct vo *vo, bool wait);
  bool vo_still_displaying(struct vo *vo);
- void vo_request_wakeup_on_done(struct vo *vo);
 -- 
-2.43.0
+2.56.1.windows.1
 

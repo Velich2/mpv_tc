@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the camera log to Rec.709 (BT.1886) LUTs in luts/.
+"""Generate the camera log to Rec.709 (BT.1886) LUTs and startup manifest.
 
 The LUTs are technical conversions built from the manufacturers' published
 log curves and gamut primaries (via colour-science), followed by a simple
-filmic tone curve. They are not the manufacturers' own LUTs.
+filmic tone curve. They are not the manufacturers' own LUTs. The manifest lets
+luts.lua avoid revalidating the generated files on the normal GPU startup path.
 
 Input: camera log RGB with video levels mapped to 0-1 (as in DaVinci Resolve).
 Output: Rec.709 primaries, BT.1886 (gamma 2.4) display encoding, 0-1.
@@ -11,6 +12,7 @@ Output: Rec.709 primaries, BT.1886 (gamma 2.4) display encoding, 0-1.
 Usage: pip install colour-science numpy; python3 tools/make_luts.py [outdir]
 """
 
+import json
 import os
 import sys
 import warnings
@@ -118,11 +120,19 @@ def write_cube(path, title, data):
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "luts")
+    manifest = {}
     for folder, name, title, decode, gamut in LUTS:
         os.makedirs(os.path.join(out, folder), exist_ok=True)
         path = os.path.join(out, folder, name + ".cube")
         write_cube(path, title, make_lut(decode, gamut))
+        manifest[os.path.relpath(path, out).replace(os.sep, "/")] = {
+            "size": os.path.getsize(path),
+            "dim": 3,
+        }
         print(path)
+    with open(os.path.join(out, "manifest.json"), "w", newline="\n") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
 
 
 if __name__ == "__main__":

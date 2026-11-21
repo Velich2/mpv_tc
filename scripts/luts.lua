@@ -54,6 +54,7 @@ local applied_vf = nil -- our entries of the vf list after applying
 local temp_file = nil  -- cleaned-up copy of the LUT for the CPU path
 local temp_key = nil   -- lut_cache key of what temp_file holds
 local lut_cache = {}   -- read_lut() result by path, size and time
+local bundled_manifest
 local warned_shadow = {}
 
 -- The user's own --lut (e.g. a display calibration), restored when a camera
@@ -100,14 +101,40 @@ local function read_file(path)
     return text
 end
 
+local function bundled_root()
+    if not script_path then
+        return nil
+    end
+    local dir = script_path:match("^(.*)[/\\][^/\\]+[/\\][^/\\]+$")
+    return dir and utils.join_path(dir, "luts") or nil
+end
+
+local function bundled_lut(rel, path, root)
+    local shipped = bundled_root()
+    if not shipped or root:lower() ~= shipped:lower() then
+        return nil
+    end
+    if bundled_manifest == nil then
+        local text = read_file(utils.join_path(root, "manifest.json"))
+        bundled_manifest = text and utils.parse_json(text) or false
+    end
+    local entry = type(bundled_manifest) == "table" and
+        bundled_manifest[rel:gsub("\\", "/")] or nil
+    local info = entry and utils.file_info(path)
+    if type(entry) == "table" and info and info.size == entry.size and
+       (entry.dim == 1 or entry.dim == 3) then
+        return { dim = entry.dim }
+    end
+end
+
 local function find_lut(rel)
-    local found
+    local found, found_root
     for _, root in ipairs(roots()) do
         local path = utils.join_path(root, rel)
         local info = utils.file_info(path)
         if info and info.is_file then
             if not found then
-                found = path
+                found, found_root = path, root
             elseif not warned_shadow[rel] then
                 -- E.g. a copy of the included LUTs from an older release.
                 warned_shadow[rel] = true
@@ -118,7 +145,7 @@ local function find_lut(rel)
             end
         end
     end
-    return found
+    return found, found_root
 end
 
 local function display_name(rel)
@@ -323,13 +350,18 @@ end
 local OUTPUT_TAGS = "format=primaries=bt.709:gamma=bt.1886"
 
 -- Returns true, or false and an error message.
-local function add_lut(path)
-    local lut, key = read_lut(path)
+local function add_lut(path, rel, root)
+    local gpu = use_gpu(path)
+    local lut = gpu and bundled_lut(rel, path, root)
+    local key
+    if not lut then
+        lut, key = read_lut(path)
+    end
     if not lut then
         return false, key
     end
 
-    if use_gpu(path) then
+    if gpu then
         if user_lut ~= "" and not warned_user_lut then
             mp.msg.warn("Your --lut is replaced while a LUT from the menu is on.")
             warned_user_lut = true
@@ -396,10 +428,10 @@ local function apply(rel, quiet)
     if not rel then
         remove_temp_file()
     else
-        local path = find_lut(rel)
+        local path, root = find_lut(rel)
         local ok, err = false, "file not found"
         if path then
-            ok, err = add_lut(path)
+            ok, err = add_lut(path, rel, root)
         end
         if not ok then
             remove_lut()

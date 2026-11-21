@@ -1,14 +1,8 @@
-From 5aa5ce738f95bd39cacbe96c792b5ecf1805a042 Mon Sep 17 00:00:00 2001
-From: mpv_tc <noreply@anthropic.com>
-Date: Tue, 13 Oct 2026 07:20:19 +0000
-Subject: [PATCH] decklink: allow changing the mirror at runtime, add menu
- entry
+From ef9c359501e3ae494adf512bee60260dd5fa26a7 Mon Sep 17 00:00:00 2001
+From: mpv_tc <mpv_tc@localhost>
+Date: Sat, 21 Nov 2026 20:33:54 +0700
+Subject: [PATCH] decklink: runtime output and menu
 
---decklink-* options now take effect at runtime: the mirror is recreated
-on the VO thread and immediately shows the current frame. The new
-decklink-devices property lists the output devices; select.lua gets a
-'DeckLink output' menu entry that sets --decklink-mirror and remembers the
-choice in ~~/decklink.state for the next start.
 ---
  DOCS/man/input.rst               |   5 +
  DOCS/man/options.rst             |   4 +-
@@ -22,10 +16,10 @@ choice in ~~/decklink.state for the next start.
  9 files changed, 293 insertions(+), 51 deletions(-)
 
 diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
-index 24f9d7a..2d2ff6d 100644
+index 70c3418..3183644 100644
 --- a/DOCS/man/input.rst
 +++ b/DOCS/man/input.rst
-@@ -3745,6 +3745,11 @@ Property list
+@@ -3988,6 +3988,11 @@ Property list
      In earlier versions of mpv, these properties returned a static (but bad)
      guess using a completely different method.
  
@@ -38,10 +32,10 @@ index 24f9d7a..2d2ff6d 100644
      The list of discovered audio devices. This is mostly for use with the
      client API, and reflects what ``--audio-device=help`` with the command line
 diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
-index d1b78cc..96adba9 100644
+index 920b306..5452d64 100644
 --- a/DOCS/man/options.rst
 +++ b/DOCS/man/options.rst
-@@ -1191,7 +1191,9 @@ Video
+@@ -1248,7 +1248,9 @@ Video
  
      The card runs on its own clock and shows each frame about 3 card frames
      after the window does. Hardware decoded frames are copied back to system
@@ -53,10 +47,10 @@ index d1b78cc..96adba9 100644
  ``--decklink-mode=<auto|mode>``
      Output mode for ``--decklink-mirror``. ``auto`` (default) picks the mode
 diff --git a/player/command.c b/player/command.c
-index 96bc06a..9c1c0c0 100644
+index 981fe47..7626eb7 100644
 --- a/player/command.c
 +++ b/player/command.c
-@@ -60,6 +60,9 @@
+@@ -65,6 +65,9 @@
  #include "options/m_config_frontend.h"
  #include "options/parse_configfile.h"
  #include "osdep/getpid.h"
@@ -66,7 +60,7 @@ index 96bc06a..9c1c0c0 100644
  #include "video/out/vo.h"
  #include "video/csputils.h"
  #include "video/hwdec.h"
-@@ -1855,6 +1858,34 @@ static int mp_property_audio_devices(void *ctx, struct m_property *prop,
+@@ -1950,6 +1953,34 @@ static int mp_property_audio_devices(void *ctx, struct m_property *prop,
                                  get_device_entry, list);
  }
  
@@ -101,7 +95,7 @@ index 96bc06a..9c1c0c0 100644
  static int mp_property_ao(void *ctx, struct m_property *p, int action, void *arg)
  {
      MPContext *mpctx = ctx;
-@@ -4439,6 +4470,9 @@ static const struct m_property mp_properties_base[] = {
+@@ -4783,6 +4814,9 @@ static const struct m_property mp_properties_base[] = {
      {"aid", mp_property_switch_track, .priv = (void *)(const int[]){0, STREAM_AUDIO}},
      {"audio-device", mp_property_audio_device},
      {"audio-device-list", mp_property_audio_devices},
@@ -112,12 +106,12 @@ index 96bc06a..9c1c0c0 100644
  
      // Video
 diff --git a/player/lua/select.lua b/player/lua/select.lua
-index 38f29cd..2029bfd 100644
+index 78e3b5d..2d81677 100644
 --- a/player/lua/select.lua
 +++ b/player/lua/select.lua
-@@ -413,6 +413,73 @@ mp.add_key_binding(nil, "select-audio-device", function ()
-     })
- end)
+@@ -438,6 +438,73 @@ mp.add_key_binding(nil, "select-audio-device", function (t)
+     open()
+ end, { complex = true })
  
 +local decklink_state = "~~/decklink.state"
 +
@@ -189,7 +183,7 @@ index 38f29cd..2029bfd 100644
  local function format_history_entry(entry)
      local status
      status, entry.time = pcall(os.date, options.history_date_format, entry.time)
-@@ -717,6 +784,8 @@ mp.add_key_binding(nil, "menu", function ()
+@@ -787,6 +854,8 @@ mp.add_key_binding(nil, "menu", function ()
          {is_disc and "Titles" or "Editions", "script-binding select/select-edition",
           mp.get_property_native("edition-list/count", 0) > 1},
          {"Audio devices", "script-binding select/select-audio-device", audio_track_count > 0},
@@ -466,7 +460,7 @@ index a63341b..16bf4d3 100644
 +// Names of the available output devices (empty if not supported).
 +char **dl_list_devices(void *ta_ctx, int *num);
 diff --git a/video/out/vo.c b/video/out/vo.c
-index 854bb22..e94317d 100644
+index d114bb0..43a9d84 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
 @@ -124,7 +124,10 @@ static const struct vo_driver *const video_out_drivers[] =
@@ -481,7 +475,7 @@ index 854bb22..e94317d 100644
  #endif
      mp_thread thread;
      struct mp_dispatch_queue *dispatch;
-@@ -240,12 +243,56 @@ static void read_opts(struct vo *vo)
+@@ -241,12 +244,56 @@ static void read_opts(struct vo *vo)
      mp_mutex_unlock(&in->lock);
  }
  
@@ -538,7 +532,7 @@ index 854bb22..e94317d 100644
          if (vo->driver->control) {
              vo->driver->control(vo, VOCTRL_VO_OPTS_CHANGED, NULL);
              // "Legacy" update of video position related options.
-@@ -326,8 +373,7 @@ static struct vo *vo_create(bool probing, struct mpv_global *global,
+@@ -328,8 +375,7 @@ static struct vo *vo_create(bool probing, struct mpv_global *global,
          goto error;
      }
  #if HAVE_DECKLINK
@@ -549,5 +543,5 @@ index 854bb22..e94317d 100644
      return vo;
  
 -- 
-2.43.0
+2.56.1.windows.1
 

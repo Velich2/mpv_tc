@@ -4,7 +4,7 @@
 
 ## English
 
-SMPTE timecode for [mpv](https://mpv.io) and an mpv 0.41.0 build for Windows and macOS that
+SMPTE timecode for [mpv](https://mpv.io) and an mpv 0.42.0 build for Windows and macOS that
 mirrors the video to **Blackmagic DeckLink / UltraStudio** cards.
 
 **Download** ([release notes](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC)):
@@ -133,7 +133,7 @@ to these.
 
 ### Building
 
-`mpv-patches/` holds the patches against mpv `v0.41.0`. The **Build** GitHub Actions workflow
+`mpv-patches/` holds the patches against mpv `v0.42.0`. The **Build** GitHub Actions workflow
 applies them and builds Windows (MSYS2) and macOS (Homebrew, Apple Silicon) packages, tests
 them and uploads them as artifacts; `versions.txt` in each package lists the library versions.
 A manual run on `main` with `release_tag` publishes both packages and `RELEASE_NOTES.md` to
@@ -150,7 +150,7 @@ sources are available from the respective projects, MSYS2 and Homebrew.
 ## Русский
 
 SMPTE-таймкод для [mpv](https://mpv.io) — Lua-скрипт и панель управления, а также сборка
-mpv 0.41.0 для Windows и macOS с выводом на карты Blackmagic DeckLink / UltraStudio.
+mpv 0.42.0 для Windows и macOS с выводом на карты Blackmagic DeckLink / UltraStudio.
 
 Скачать ([описание релиза](https://github.com/Velich2/mpv_tc/releases/tag/MPV_TC)):
 [Windows](https://github.com/Velich2/mpv_tc/releases/download/MPV_TC/mpv-tc-win64.zip) ·
@@ -213,7 +213,7 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 
 В сборках mpv_tc встроенный OSC уже показывает таймкод (патч `0008`), ничего делать не нужно.
 
-Для обычного mpv: `osc/osc.lua` — стандартный OSC из mpv 0.41.0, у которого вместо текущего
+Для обычного mpv: `osc/osc.lua` — стандартный OSC из mpv 0.42.0, у которого вместо текущего
 времени слева от полосы перемотки показывается SMPTE-таймкод. Рассчитан на mpv 0.40–0.41
 (`mpv --version`).
 
@@ -262,7 +262,7 @@ mpv --term-status-msg='TC ${user-data/smpte_timecode}' file.mov
 
 ### Вывод на Blackmagic DeckLink / UltraStudio (форк mpv)
 
-Патч `mpv-patches/0001-vo-add-DeckLink-mirror-output.patch` к mpv 0.41.0 добавляет зеркало:
+Патч `mpv-patches/0001-vo-add-DeckLink-mirror-output.patch` к mpv 0.42.0 добавляет зеркало:
 окно mpv на мониторе работает как обычно (OSC, таймкод), а на карту параллельно идёт чистая
 картинка без OSD и субтитров. Windows и macOS (патч `0005`), нужен установленный Blackmagic
 Desktop Video.

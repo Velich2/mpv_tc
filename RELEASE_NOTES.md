@@ -1,6 +1,6 @@
 # mpv_tc — mpv с SMPTE-таймкодом и выводом на Blackmagic DeckLink
 
-Сборка mpv 0.41.0 для Windows (64 бит) и macOS (Apple Silicon) с доработками:
+Сборка mpv 0.42.0 для Windows (64 бит) и macOS (Apple Silicon) с доработками:
 
 - **SMPTE-таймкод** `HH:MM:SS:FF` (drop-frame `HH:MM:SS;FF` для 29.97/59.94) поверх видео
   и вместо текущего времени в панели управления (OSC).
@@ -21,7 +21,7 @@
 
 | Файл / папка | Что это |
 |---|---|
-| `mpv.exe`, `mpv.com`, `*.dll` (Windows) / `mpv.app` (macOS) | mpv 0.41.0 с выводом на DeckLink и таймкодом в панели управления |
+| `mpv.exe`, `mpv.com`, `*.dll` (Windows) / `mpv.app` (macOS) | mpv 0.42.0 с выводом на DeckLink и таймкодом в панели управления |
 | `scripts/smpte_timecode.lua` | таймкод поверх видео |
 | `scripts/luts.lua`, `luts/` | выбор LUT из меню и набор LUT-ов |
 | `script-opts/*.conf` | настройки скриптов с описанием |

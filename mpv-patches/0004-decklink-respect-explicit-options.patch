@@ -1,13 +1,8 @@
-From 09de60654f4c25a0f4b7b1714284fc714851eb4d Mon Sep 17 00:00:00 2001
-From: mpv_tc <noreply@anthropic.com>
-Date: Tue, 13 Oct 2026 07:48:49 +0000
-Subject: [PATCH] select.lua: don't override explicit DeckLink options with the
- saved state
+From a428a7df11b9b0663dd22606f848d8ec7b6bacfc Mon Sep 17 00:00:00 2001
+From: mpv_tc <mpv_tc@localhost>
+Date: Sat, 21 Nov 2026 20:34:29 +0700
+Subject: [PATCH] ported 0004-decklink-respect-explicit-options
 
-Restore the device and audio sync chosen in the menu only if the options
-were not given on the command line or in a config file, so that e.g. an
-explicit empty --decklink-mirror keeps the output disabled. Adds the
-option-info/<name>/set-from-config property for this.
 ---
  DOCS/man/input.rst    |  3 +++
  player/command.c      |  1 +
@@ -15,10 +10,10 @@ option-info/<name>/set-from-config property for this.
  3 files changed, 13 insertions(+), 3 deletions(-)
 
 diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
-index 36022d5..fdb4b65 100644
+index 01323a4..562dae7 100644
 --- a/DOCS/man/input.rst
 +++ b/DOCS/man/input.rst
-@@ -4014,6 +4014,9 @@ Property list
+@@ -4280,6 +4280,9 @@ Property list
          to if the option is e.g. changed at runtime is left undefined (meaning
          it could change in the future).
  
@@ -29,10 +24,10 @@ index 36022d5..fdb4b65 100644
          Whether the option was set per-file. This is the case with
          automatically loaded profiles, file-dir configs, and other cases. It
 diff --git a/player/command.c b/player/command.c
-index 6c2c3fc..1944bd0 100644
+index 3d14fc9..7a40cb1 100644
 --- a/player/command.c
 +++ b/player/command.c
-@@ -3945,6 +3945,7 @@ static int mp_property_option_info(void *ctx, struct m_property *prop,
+@@ -4248,6 +4248,7 @@ static int mp_property_option_info(void *ctx, struct m_property *prop,
              {"name",                    SUB_PROP_STR(co->name)},
              {"type",                    SUB_PROP_STR(opt->type->name)},
              {"set-from-commandline",    SUB_PROP_BOOL(co->is_set_from_cmdline)},
@@ -41,10 +36,10 @@ index 6c2c3fc..1944bd0 100644
              {"expects-file",            SUB_PROP_BOOL(opt->flags & M_OPT_FILE)},
              {"default-value",           *opt, def, .unavailable = !has_default},
 diff --git a/player/lua/select.lua b/player/lua/select.lua
-index 80b49fd..074f6f4 100644
+index 8df15a1..86c79a9 100644
 --- a/player/lua/select.lua
 +++ b/player/lua/select.lua
-@@ -419,17 +419,23 @@ local function decklink_supported()
+@@ -444,17 +444,23 @@ local function decklink_supported()
      return mp.get_property("option-info/decklink-mirror") ~= nil
  end
  
@@ -72,5 +67,5 @@ index 80b49fd..074f6f4 100644
          end
      end
 -- 
-2.43.0
+2.56.1.windows.1
 

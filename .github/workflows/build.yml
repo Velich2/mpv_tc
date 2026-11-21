@@ -36,7 +36,7 @@ permissions:
   contents: read
 
 env:
-  MPV_REF: v0.41.0
+  MPV_REF: v0.42.0
 
 jobs:
   # Also runs the GPU (--lut) path of luts.lua, which needs a GPU context
@@ -56,15 +56,33 @@ jobs:
           path: mpv
           persist-credentials: false
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: haasn/libplacebo
+          ref: v7.387.0
+          path: libplacebo
+          persist-credentials: false
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc meson ninja-build pkg-config \
+          sudo apt-get install -y --no-install-recommends gcc g++ meson ninja-build pkg-config \
             libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev \
-            libswresample-dev libswscale-dev libplacebo-dev libass-dev libluajit-5.1-dev \
+            libswresample-dev libswscale-dev libass-dev libluajit-5.1-dev \
             libzimg-dev libjpeg-turbo8-dev liblcms2-dev libuchardet-dev \
-            libegl-dev libgl-dev libx11-dev libxext-dev libxkbcommon-dev libxpresent-dev \
-            libxrandr-dev libxss-dev xvfb xauth libegl-mesa0 libgl1-mesa-dri ffmpeg python3
+            libegl-dev libepoxy-dev libgl-dev libglslang-dev libx11-dev libxext-dev \
+            libxkbcommon-dev libxpresent-dev libxrandr-dev libxss-dev libxxhash-dev \
+            xvfb xauth libegl-mesa0 libgl1-mesa-dri ffmpeg python3
+
+      - name: Build libplacebo
+        run: |
+          cd libplacebo
+          meson setup build --buildtype=release --prefix=/usr/local \
+            -Dvulkan=disabled -Dopengl=enabled -Dglslang=enabled -Dshaderc=disabled \
+            -Dlcms=enabled -Ddemos=false -Dtests=false
+          meson compile -C build
+          sudo meson install -C build
+          sudo ldconfig
 
       - name: Apply patches
         run: |
@@ -90,6 +108,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -o pipefail
+          python3 ci/check_lut_manifest.py
           MPV=mpv/build/mpv
           $MPV --no-config --version
           ffmpeg -v error -f lavfi -i testsrc2=s=1920x800:r=25 -t 3 -c:v mpeg2video -q:v 2 test.mkv

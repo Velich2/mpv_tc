@@ -1,23 +1,8 @@
-From 10c548910ab8c4904c85a4d7f75d759986310d0c Mon Sep 17 00:00:00 2001
-From: Claude <noreply@anthropic.com>
-Date: Wed, 14 Oct 2026 16:23:28 +0000
-Subject: [PATCH 1/2] decklink: fixes from review
+From a1bbc6c71c87a07935720ff47afc183c0a5837f1 Mon Sep 17 00:00:00 2001
+From: mpv_tc <mpv_tc@localhost>
+Date: Sat, 21 Nov 2026 20:37:00 +0700
+Subject: [PATCH] decklink: harden output and timing
 
-- Grow the frame ring on demand, sized by frame rate and delay, so that
-  --decklink-delay and 50/60p content no longer skip and repeat frames.
-- Use the expected display time of display-synced frames instead of the
-  time they are queued (frames were doubled with display-resample).
-- Estimate the frame rate of files without one from the median of recent
-  frame durations, snapped to standard rates, so the mode does not flip.
-- Honour the video crop, clip the output to the legal SDI range, warn
-  about HDR video (no tone mapping).
-- Destroy the mirror before the VO driver, which may own the images.
-- Change --decklink-delay without restarting the output; read the latency
-  without locks; copy output frames outside the mirror lock.
-- Do not count a latency change twice before the audio has started.
-- Notify decklink-latency changes; cache decklink-devices for a second.
-- macOS: print HRESULTs correctly; Windows: rebuild DeckLinkAPI.h when
-  an included IDL file changes.
 ---
  DOCS/man/input.rst                 |  10 +-
  DOCS/man/options.rst               |  13 +-
@@ -32,10 +17,10 @@ Subject: [PATCH 1/2] decklink: fixes from review
  10 files changed, 357 insertions(+), 109 deletions(-)
 
 diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
-index c9ce3ba..21a6446 100644
+index e9ddeea..b43a500 100644
 --- a/DOCS/man/input.rst
 +++ b/DOCS/man/input.rst
-@@ -3747,12 +3747,13 @@ Property list
+@@ -3990,12 +3990,13 @@ Property list
  
  ``decklink-devices``
      The DeckLink devices with an output, for ``--decklink-mirror`` (Windows
@@ -52,7 +37,7 @@ index c9ce3ba..21a6446 100644
  
  ``audio-device-list``
      The list of discovered audio devices. This is mostly for use with the
-@@ -4015,7 +4016,8 @@ Property list
+@@ -4281,7 +4282,8 @@ Property list
          it could change in the future).
  
      ``option-info/<name>/set-from-config``
@@ -63,10 +48,10 @@ index c9ce3ba..21a6446 100644
      ``option-info/<name>/set-locally``
          Whether the option was set per-file. This is the case with
 diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
-index bc5b3e0..72d5b7e 100644
+index eb3480c..61aa9a4 100644
 --- a/DOCS/man/options.rst
 +++ b/DOCS/man/options.rst
-@@ -1185,13 +1185,14 @@ Video
+@@ -1242,13 +1242,14 @@ Video
      Additionally output the video, without OSD and subtitles, to a Blackmagic
      DeckLink or UltraStudio device (Windows and macOS, requires Blackmagic
      Desktop Video). ``auto`` uses the first device with an output, a number selects
@@ -86,7 +71,7 @@ index bc5b3e0..72d5b7e 100644
      menu (``script-binding select/menu``) sets it and remembers the choice
      for the next start in ``~~/decklink.state``.
  
-@@ -1204,7 +1205,7 @@ Video
+@@ -1261,7 +1262,7 @@ Video
  ``--decklink-delay=<seconds>``
      Additional delay of the ``--decklink-mirror`` output (default: 0). Increase
      it if frames are repeated or skipped on the output while they play
@@ -96,10 +81,10 @@ index bc5b3e0..72d5b7e 100644
  ``--decklink-audio-sync=<yes|no>``
      Delay the audio by the latency of the ``--decklink-mirror`` output (see the
 diff --git a/meson.build b/meson.build
-index bb2dcc4..5e0caf8 100644
+index fe935bd..03d76fe 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -1018,6 +1018,12 @@ if features['decklink'] and features['win32-desktop']
+@@ -1062,6 +1062,12 @@ if features['decklink'] and features['win32-desktop']
      sources += custom_target('DeckLinkAPI.h',
          input: 'video/out/decklink/sdk/DeckLinkAPI.idl',
          output: 'DeckLinkAPI.h',
@@ -113,7 +98,7 @@ index bb2dcc4..5e0caf8 100644
                    '-h', '-o', '@OUTPUT@', '@INPUT@'])
      sources += files('video/out/decklink/backend_win.c')
 diff --git a/player/audio.c b/player/audio.c
-index c8f53b7..243212c 100644
+index 2f0cbeb..08ea5a9 100644
 --- a/player/audio.c
 +++ b/player/audio.c
 @@ -239,11 +239,22 @@ double get_audio_delay(struct MPContext *mpctx)
@@ -141,12 +126,12 @@ index c8f53b7..243212c 100644
          mp_wakeup_core(mpctx);
      }
 diff --git a/player/command.c b/player/command.c
-index 1944bd0..6e8a94f 100644
+index 7a40cb1..240c671 100644
 --- a/player/command.c
 +++ b/player/command.c
-@@ -92,6 +92,14 @@ struct command_ctx {
-     // All properties, terminated with a {0} item.
-     struct m_property *properties;
+@@ -97,6 +97,14 @@ struct command_ctx {
+     // All properties, sorted by name.
+     struct m_property_list properties;
  
 +#if HAVE_DECKLINK
 +    // decklink-devices, cached because enumerating takes a while.
@@ -159,7 +144,7 @@ index 1944bd0..6e8a94f 100644
      double last_seek_time;
      double last_seek_pts;
      double marked_pts;
-@@ -1876,13 +1884,19 @@ static int mp_property_decklink_devices(void *ctx, struct m_property *prop,
+@@ -1971,13 +1979,19 @@ static int mp_property_decklink_devices(void *ctx, struct m_property *prop,
          *(struct m_option *)arg = (struct m_option){.type = CONF_TYPE_NODE};
          return M_PROPERTY_OK;
      }
@@ -187,10 +172,10 @@ index 1944bd0..6e8a94f 100644
  #endif
  
 diff --git a/player/core.h b/player/core.h
-index 5796fe2..5e69a81 100644
+index afcd26e..5e34c11 100644
 --- a/player/core.h
 +++ b/player/core.h
-@@ -361,6 +361,8 @@ typedef struct MPContext {
+@@ -372,6 +372,8 @@ typedef struct MPContext {
      double delay;
      // AV sync: time in seconds until next frame should be shown
      double time_frame;
@@ -762,7 +747,7 @@ index e3249a2..b405b14 100644
  // Names of the available output devices (empty if not supported).
  char **dl_list_devices(void *ta_ctx, int *num);
 diff --git a/video/out/vo.c b/video/out/vo.c
-index 79ef769..2a51954 100644
+index dad9277..704e2e2 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
 @@ -125,6 +125,7 @@ static const struct vo_driver *const video_out_drivers[] =
@@ -773,7 +758,7 @@ index 79ef769..2a51954 100644
      // Option values dl_mirror was created with (VO thread only).
      char *dl_device, *dl_mode;
      double dl_delay;
-@@ -244,6 +245,17 @@ static void read_opts(struct vo *vo)
+@@ -245,6 +246,17 @@ static void read_opts(struct vo *vo)
  }
  
  #if HAVE_DECKLINK
@@ -791,7 +776,7 @@ index 79ef769..2a51954 100644
  // (Re)creates the DeckLink mirror if its options changed.
  static void update_decklink(struct vo *vo)
  {
-@@ -253,17 +265,22 @@ static void update_decklink(struct vo *vo)
+@@ -254,17 +266,22 @@ static void update_decklink(struct vo *vo)
      const char *mode = opts->decklink_mode ? opts->decklink_mode : "";
  
      if (in->dl_device && strcmp(device, in->dl_device) == 0 &&
@@ -820,7 +805,7 @@ index 79ef769..2a51954 100644
  
      if (!device[0])
          return;
-@@ -427,9 +444,6 @@ void vo_destroy(struct vo *vo)
+@@ -429,9 +446,6 @@ void vo_destroy(struct vo *vo)
      struct vo_internal *in = vo->in;
      mp_dispatch_run(in->dispatch, terminate_vo, vo);
      mp_thread_join(vo->in->thread);
@@ -830,7 +815,7 @@ index 79ef769..2a51954 100644
      dealloc_vo(vo);
  }
  
-@@ -928,6 +942,38 @@ bool vo_is_visible(struct vo *vo)
+@@ -933,6 +947,38 @@ bool vo_is_visible(struct vo *vo)
      return r;
  }
  
@@ -869,7 +854,7 @@ index 79ef769..2a51954 100644
  // Direct the VO thread to put the currently queued image on the screen.
  // vo_is_ready_for_frame() must have returned true before this call.
  // Ownership of frame is handed to the vo.
-@@ -939,13 +985,13 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
+@@ -944,13 +990,13 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
             (!in->current_frame || in->current_frame->num_vsyncs < 1));
      in->hasframe = true;
      frame->frame_id = ++(in->current_frame_id);
@@ -885,7 +870,7 @@ index 79ef769..2a51954 100644
      in->wakeup_pts = frame->display_synced
                     ? 0 : frame->pts + MPMAX(frame->duration, 0);
      wakeup_locked(vo);
-@@ -1293,6 +1339,11 @@ static MP_THREAD_VOID vo_thread(void *ptr)
+@@ -1292,6 +1338,11 @@ static MP_THREAD_VOID vo_thread(void *ptr)
  
          wait_vo(vo, wait_until);
      }
@@ -898,5 +883,5 @@ index 79ef769..2a51954 100644
      talloc_free(in->current_frame);
      in->current_frame = NULL;
 -- 
-2.43.0
+2.56.1.windows.1
 

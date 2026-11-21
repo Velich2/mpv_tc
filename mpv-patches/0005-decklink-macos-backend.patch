@@ -1,7 +1,7 @@
-From 169f6af54aff666e16edb6d23aaea8fb9bf5c58c Mon Sep 17 00:00:00 2001
-From: Claude <noreply@anthropic.com>
-Date: Tue, 13 Oct 2026 09:06:22 +0000
-Subject: [PATCH] decklink: add macOS backend
+From f873e80ff600e99834b01356e2ef54c053a172ad Mon Sep 17 00:00:00 2001
+From: mpv_tc <mpv_tc@localhost>
+Date: Sat, 21 Nov 2026 20:34:29 +0700
+Subject: [PATCH] ported 0005-decklink-macos-backend
 
 ---
  DOCS/man/input.rst                            |    2 +-
@@ -33,10 +33,10 @@ Subject: [PATCH] decklink: add macOS backend
  create mode 100644 video/out/decklink/sdk/mac/DeckLinkAPIVersion.h
 
 diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
-index fdb4b65..c9ce3ba 100644
+index 562dae7..e9ddeea 100644
 --- a/DOCS/man/input.rst
 +++ b/DOCS/man/input.rst
-@@ -3747,7 +3747,7 @@ Property list
+@@ -3990,7 +3990,7 @@ Property list
  
  ``decklink-devices``
      The DeckLink devices with an output, for ``--decklink-mirror`` (Windows
@@ -46,10 +46,10 @@ index fdb4b65..c9ce3ba 100644
  
  ``decklink-latency``
 diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
-index b44626a..bc5b3e0 100644
+index f597858..eb3480c 100644
 --- a/DOCS/man/options.rst
 +++ b/DOCS/man/options.rst
-@@ -1183,8 +1183,8 @@ Video
+@@ -1240,8 +1240,8 @@ Video
  
  ``--decklink-mirror=<device>``
      Additionally output the video, without OSD and subtitles, to a Blackmagic
@@ -61,10 +61,10 @@ index b44626a..bc5b3e0 100644
      contains the string. Empty (default) disables it. ``dummy`` simulates a
      device for testing (``dummy:<file>`` writes the output as raw UYVY).
 diff --git a/meson.build b/meson.build
-index 333be6b..bb2dcc4 100644
+index acd1b98..fe935bd 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -1006,7 +1006,7 @@ endif
+@@ -1050,7 +1050,7 @@ endif
  decklink_allowed = get_option('decklink').allowed()
  widl = find_program('widl', required: false)
  features += {'decklink': decklink_allowed and (get_option('decklink').enabled() or
@@ -73,7 +73,7 @@ index 333be6b..bb2dcc4 100644
  if features['decklink']
      sources += files('video/out/decklink/backend_dummy.c',
                       'video/out/decklink/mirror.c')
-@@ -1023,6 +1023,15 @@ if features['decklink'] and features['win32-desktop']
+@@ -1067,6 +1067,15 @@ if features['decklink'] and features['win32-desktop']
      sources += files('video/out/decklink/backend_win.c')
      dependencies += cc.find_library('oleaut32')
  endif
@@ -3546,5 +3546,5 @@ index 0000000..6187cc7
 +#endif	// __DeckLink_API_Version_h__
 +
 -- 
-2.43.0
+2.56.1.windows.1
 

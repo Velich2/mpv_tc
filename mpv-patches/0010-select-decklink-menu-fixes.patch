@@ -1,22 +1,17 @@
-From b8b5d8f61b58d1e76b8caa2370ecd4e56304f98d Mon Sep 17 00:00:00 2001
-From: Claude <noreply@anthropic.com>
-Date: Wed, 14 Oct 2026 16:23:28 +0000
-Subject: [PATCH 2/2] select.lua: DeckLink menu fixes
+﻿From 96c643e90b012cf38aec220553f0f720383110e4 Mon Sep 17 00:00:00 2001
+From: mpv_tc <mpv_tc@localhost>
+Date: Sat, 21 Nov 2026 20:45:43 +0700
+Subject: [PATCH] select: fix DeckLink menu state
 
-- Save only the choices made in the menu, not options from the command
-  line or a config file.
-- Warn instead of failing on builds without DeckLink support.
-- Preselect the entry matching an index or part of a name; show whether
-  the output is actually running.
 ---
  player/lua/select.lua | 65 +++++++++++++++++++++++++++++++------------
  1 file changed, 47 insertions(+), 18 deletions(-)
 
 diff --git a/player/lua/select.lua b/player/lua/select.lua
-index 4551b1f..2eab65b 100644
+index 6383bf8..22e1d1c 100644
 --- a/player/lua/select.lua
 +++ b/player/lua/select.lua
-@@ -424,18 +424,23 @@ local function set_explicitly(option)
+@@ -449,18 +449,23 @@ local function set_explicitly(option)
             mp.get_property_bool("option-info/" .. option .. "/set-from-config")
  end
  
@@ -45,7 +40,7 @@ index 4551b1f..2eab65b 100644
              mp.set_property_bool("decklink-audio-sync", true)
          end
      end
-@@ -451,15 +456,40 @@ local function save_decklink()
+@@ -476,15 +481,40 @@ local function save_decklink()
          show_error(error_message)
          return
      end
@@ -89,7 +84,7 @@ index 4551b1f..2eab65b 100644
      local audio_sync = mp.get_property_bool("decklink-audio-sync")
      local items = {"Off", "Auto (first device)"}
      local devices = {"", "auto"}
-@@ -474,12 +504,7 @@ mp.add_key_binding(nil, "select-decklink", function ()
+@@ -499,12 +529,7 @@ mp.add_key_binding(nil, "select-decklink", function ()
          return
      end
  
@@ -103,7 +98,7 @@ index 4551b1f..2eab65b 100644
  
      -- Delays the audio by the output latency, so that it matches the
      -- DeckLink output instead of the window.
-@@ -491,11 +516,13 @@ mp.add_key_binding(nil, "select-decklink", function ()
+@@ -516,11 +541,13 @@ mp.add_key_binding(nil, "select-decklink", function ()
          default_item = default_item,
          submit = function (id)
              if id > #devices then
@@ -120,7 +115,7 @@ index 4551b1f..2eab65b 100644
                  mp.osd_message("DeckLink output: " .. (id == 1 and "off" or items[id]))
              end
              save_decklink()
-@@ -812,7 +839,9 @@ mp.add_key_binding(nil, "menu", function ()
+@@ -882,7 +909,9 @@ mp.add_key_binding(nil, "menu", function ()
          {is_disc and "Titles" or "Editions", "script-binding select/select-edition",
           mp.get_property_native("edition-list/count", 0) > 1},
          {"Audio devices", "script-binding select/select-audio-device", audio_track_count > 0},
@@ -132,5 +127,5 @@ index 4551b1f..2eab65b 100644
          {"Timecode overlay: " .. (timecode_overlay and "on" or "off"),
           "script-binding smpte_timecode/toggle", timecode_overlay ~= nil},
 -- 
-2.43.0
+2.56.1.windows.1
 

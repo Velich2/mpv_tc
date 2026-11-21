@@ -1,15 +1,8 @@
-From 01941e21aaaa71377eec7ed6f42533e292039dc8 Mon Sep 17 00:00:00 2001
-From: mpv_tc <noreply@anthropic.com>
-Date: Tue, 13 Oct 2026 05:13:05 +0000
-Subject: [PATCH] vo: add DeckLink mirror output
+From 7f23a1c88fe9942efb8416799854661c90868858 Mon Sep 17 00:00:00 2001
+From: mpv_tc <mpv_tc@localhost>
+Date: Sat, 21 Nov 2026 20:33:33 +0700
+Subject: [PATCH] decklink: add mirror output
 
-Mirrors the frames shown by the VO, without OSD, to a Blackmagic DeckLink
-device: --decklink-mirror, --decklink-mode, --decklink-delay. The card runs
-scheduled playback on its own clock; each slot is filled with the frame
-that was due a fixed latency earlier, so the output stays smooth regardless
-of the window's vsync. Windows backend via the Desktop Video COM API (SDK
-12.0 IDL compiled with widl); a dummy backend allows testing without
-hardware.
 ---
  DOCS/man/options.rst                          |   23 +
  meson.build                                   |   21 +
@@ -86,10 +79,10 @@ hardware.
  create mode 100644 video/out/decklink/sdk/README.md
 
 diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
-index fa71dc0..d1b78cc 100644
+index dddff27..920b306 100644
 --- a/DOCS/man/options.rst
 +++ b/DOCS/man/options.rst
-@@ -1181,6 +1181,29 @@ Video
+@@ -1238,6 +1238,29 @@ Video
      Specify the video output backend to be used. See `VIDEO OUTPUT DRIVERS`_ for
      details and descriptions of available drivers.
  
@@ -120,10 +113,10 @@ index fa71dc0..d1b78cc 100644
      Specify a priority list of video decoders to be used, according to their
      family and name. See ``--ad`` for further details. Both of these options
 diff --git a/meson.build b/meson.build
-index fb10be5..333be6b 100644
+index b15f310..acd1b98 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -1003,6 +1003,27 @@ if features['shaderc']
+@@ -1047,6 +1047,27 @@ if features['shaderc']
      sources += files('video/out/gpu/spirv_shaderc.c')
  endif
  
@@ -152,10 +145,10 @@ index fb10be5..333be6b 100644
  features += {'sixel': sixel.found()}
  if features['sixel']
 diff --git a/meson.options b/meson.options
-index 52782f7..f3642db 100644
+index 3211082..5339815 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -79,6 +79,7 @@ option('gl-x11', type: 'feature', value: 'disabled', description: 'OpenGL X11/GL
+@@ -83,6 +83,7 @@ option('gl-x11', type: 'feature', value: 'disabled', description: 'OpenGL X11/GL
  option('sdl2-video', type: 'feature', value: 'disabled', description: 'SDL2 video output')
  option('shaderc', type: 'feature', value: 'auto', description: 'libshaderc SPIR-V compiler')
  option('sixel', type: 'feature', value:'auto', description: 'Sixel video output')
@@ -164,10 +157,10 @@ index 52782f7..f3642db 100644
  option('plain-gl', type: 'feature', value: 'auto', description: 'OpenGL without platform-specific code (e.g. for libmpv)')
  option('vdpau', type: 'feature', value: 'auto', description: 'VDPAU acceleration')
 diff --git a/options/options.c b/options/options.c
-index 716c3e6..2368ad9 100644
+index a432414..2e40971 100644
 --- a/options/options.c
 +++ b/options/options.c
-@@ -250,6 +250,11 @@ static const m_option_t mp_vo_opt_list[] = {
+@@ -256,6 +256,11 @@ static const m_option_t mp_vo_opt_list[] = {
  #endif
      {"swapchain-depth", OPT_INT(swapchain_depth), M_RANGE(1, VO_MAX_SWAPCHAIN_DEPTH)},
      {"override-display-fps", OPT_REPLACED("display-fps-override")},
@@ -179,7 +172,7 @@ index 716c3e6..2368ad9 100644
      {0}
  };
  
-@@ -274,6 +279,7 @@ const struct m_sub_options vo_sub_opts = {
+@@ -280,6 +285,7 @@ const struct m_sub_options vo_sub_opts = {
          .border = true,
          .title_bar = true,
          .appid = "mpv",
@@ -188,10 +181,10 @@ index 716c3e6..2368ad9 100644
          .window_scale = 1.0,
          .x11_bypass_compositor = 2,
 diff --git a/options/options.h b/options/options.h
-index 12dafea..ffd7ed1 100644
+index 1f8e7cb..3bc8292 100644
 --- a/options/options.h
 +++ b/options/options.h
-@@ -91,6 +91,10 @@ typedef struct mp_vo_opts {
+@@ -92,6 +92,10 @@ typedef struct mp_vo_opts {
      int swapchain_depth;  // max number of images to render ahead
  
      struct m_geometry video_crop;
@@ -6376,7 +6369,7 @@ index 0000000..f499505
 +header of each file. DeckLinkAPI.h is generated from DeckLinkAPI.idl with widl
 +at build time.
 diff --git a/video/out/vo.c b/video/out/vo.c
-index c9cde30..854bb22 100644
+index c90a55c..d114bb0 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
 @@ -45,6 +45,9 @@
@@ -6399,7 +6392,7 @@ index c9cde30..854bb22 100644
      mp_thread thread;
      struct mp_dispatch_queue *dispatch;
      struct dr_helper *dr_helper;
-@@ -319,6 +325,10 @@ static struct vo *vo_create(bool probing, struct mpv_global *global,
+@@ -321,6 +327,10 @@ static struct vo *vo_create(bool probing, struct mpv_global *global,
          mp_thread_join(vo->in->thread);
          goto error;
      }
@@ -6410,7 +6403,7 @@ index c9cde30..854bb22 100644
      return vo;
  
  error:
-@@ -371,6 +381,9 @@ void vo_destroy(struct vo *vo)
+@@ -373,6 +383,9 @@ void vo_destroy(struct vo *vo)
      struct vo_internal *in = vo->in;
      mp_dispatch_run(in->dispatch, terminate_vo, vo);
      mp_thread_join(vo->in->thread);
@@ -6420,7 +6413,7 @@ index c9cde30..854bb22 100644
      dealloc_vo(vo);
  }
  
-@@ -881,6 +894,12 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
+@@ -886,6 +899,12 @@ void vo_queue_frame(struct vo *vo, struct vo_frame *frame)
      in->hasframe = true;
      frame->frame_id = ++(in->current_frame_id);
      in->frame_queued = frame;
@@ -6434,5 +6427,5 @@ index c9cde30..854bb22 100644
                     ? 0 : frame->pts + MPMAX(frame->duration, 0);
      wakeup_locked(vo);
 -- 
-2.43.0
+2.56.1.windows.1
 
