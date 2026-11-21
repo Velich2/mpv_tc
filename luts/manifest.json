@@ -1,38 +1,38 @@
 {
   "ARRI/LogC3 AWG3 EI800 to Rec709.cube": {
     "dim": 3,
-    "size": 1006385
+    "size": 970445
   },
   "ARRI/LogC4 AWG4 to Rec709.cube": {
     "dim": 3,
-    "size": 1006376
+    "size": 970436
   },
   "Blackmagic/DaVinci Intermediate DWG to Rec709.cube": {
     "dim": 3,
-    "size": 1006385
+    "size": 970445
   },
   "Blackmagic/Film Gen5 to Rec709.cube": {
     "dim": 3,
-    "size": 1006382
+    "size": 970442
   },
   "Sony/S-Log2 S-Gamut to Rec709.cube": {
     "dim": 3,
-    "size": 1006375
+    "size": 970435
   },
   "Sony/S-Log3 S-Gamut3 to Rec709.cube": {
     "dim": 3,
-    "size": 1006376
+    "size": 970436
   },
   "Sony/S-Log3 S-Gamut3.Cine to Rec709.cube": {
     "dim": 3,
-    "size": 1006381
+    "size": 970441
   },
   "Sony/S-Log3 Venice S-Gamut3 to Rec709.cube": {
     "dim": 3,
-    "size": 1006383
+    "size": 970443
   },
   "Sony/S-Log3 Venice S-Gamut3.Cine to Rec709.cube": {
     "dim": 3,
-    "size": 1006388
+    "size": 970448
   }
 }

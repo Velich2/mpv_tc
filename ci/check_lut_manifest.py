@@ -16,7 +16,8 @@ if set(manifest) != set(files):
 
 for relative, path in files.items():
 	entry = manifest[relative]
-	if entry.get("dim") not in (1, 3) or entry.get("size") != path.stat().st_size:
+	canonical_size = len(path.read_bytes().replace(b"\r\n", b"\n"))
+	if entry.get("dim") not in (1, 3) or entry.get("size") != canonical_size:
 		raise SystemExit(f"manifest entry is invalid: {relative}")
 
 print(f"LUT manifest matches {len(files)} files")
