@@ -61,6 +61,7 @@ jobs:
           repository: haasn/libplacebo
           ref: v7.387.0
           path: libplacebo
+          submodules: recursive
           persist-credentials: false
 
       - name: Install dependencies
