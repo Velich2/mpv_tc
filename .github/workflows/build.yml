@@ -70,7 +70,7 @@ jobs:
             libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev \
             libswresample-dev libswscale-dev libass-dev libluajit-5.1-dev \
             libzimg-dev libjpeg-turbo8-dev liblcms2-dev libuchardet-dev \
-            libegl-dev libepoxy-dev libgl-dev libglslang-dev libx11-dev libxext-dev \
+            libegl-dev libepoxy-dev libgl-dev libshaderc-dev libx11-dev libxext-dev \
             libxkbcommon-dev libxpresent-dev libxrandr-dev libxss-dev libxxhash-dev \
             xvfb xauth libegl-mesa0 libgl1-mesa-dri ffmpeg python3
 
@@ -78,7 +78,7 @@ jobs:
         run: |
           cd libplacebo
           meson setup build --buildtype=release --prefix=/usr/local \
-            -Dvulkan=disabled -Dopengl=enabled -Dglslang=enabled -Dshaderc=disabled \
+            -Dvulkan=disabled -Dopengl=enabled -Dglslang=disabled -Dshaderc=enabled \
             -Dlcms=enabled -Ddemos=false -Dtests=false
           meson compile -C build
           sudo meson install -C build
